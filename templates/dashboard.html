@@ -1,0 +1,66 @@
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <title>IoT Anomaly Dashboard</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link rel="stylesheet" href="/static/style.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  </head>
+  <body>
+    <div class="topbar">
+      <h1>IoT Network Health — Cyber NOC</h1>
+      <div class="controls">
+        <input id="fileInput" type="file" accept=".csv">
+        <button id="uploadBtn">Upload & Train</button>
+        <span id="statusBadge" class="badge green">LIVE</span>
+      </div>
+    </div>
+
+    <div class="container">
+      <div class="left-panel">
+        <div class="card" id="metricsCard">
+          <h2>Live Metrics</h2>
+          <canvas id="chartTemp"></canvas>
+          <canvas id="chartHum" style="margin-top:20px"></canvas>
+          <canvas id="chartBat" style="margin-top:20px"></canvas>
+        </div>
+      </div>
+
+      <div class="right-panel">
+        <div class="card" id="devicesCard">
+          <h2>Device Status</h2>
+          <table id="deviceTable">
+            <thead><tr><th>Device</th><th>Temp</th><th>Hum</th><th>Battery</th><th>Status</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+        <div class="card" id="alertsCard">
+          <h2>Alerts</h2>
+          <div id="alerts"></div>
+        </div>
+      </div>
+    </div>
+
+    <script src="/static/charts.js"></script>
+    <script>
+      document.getElementById('uploadBtn').addEventListener('click', async () => {
+        const fi = document.getElementById('fileInput');
+        if (!fi.files.length) { alert('Choose CSV file first'); return; }
+        const fd = new FormData();
+        fd.append('file', fi.files[0]);
+        document.getElementById('statusBadge').innerText = 'TRAINING...'; document.getElementById('statusBadge').className='badge yellow';
+        const res = await fetch('/upload', { method: 'POST', body: fd });
+        const j = await res.json();
+        if (j.success) {
+          alert('Uploaded and model trained on server.');
+          document.getElementById('statusBadge').innerText = 'LIVE'; document.getElementById('statusBadge').className='badge green';
+        } else {
+          alert('Upload failed: ' + (j.error || JSON.stringify(j)));
+          document.getElementById('statusBadge').innerText = 'ERROR'; document.getElementById('statusBadge').className='badge red';
+        }
+      });
+    </script>
+  </body>
+</html>

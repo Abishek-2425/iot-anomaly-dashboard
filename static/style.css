@@ -1,0 +1,47 @@
+
+:root{
+  --bg:#0b0f14;
+  --card:#0f1720;
+  --accent:#00f0ff;
+  --text:#cfefff;
+  --muted:#7ba6b0;
+  --danger:#ff4d6d;
+  --success:#39ff7b;
+  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+}
+body{
+  margin:0;
+  background: linear-gradient(180deg,#02040a 0%, #071022 100%);
+  color:var(--text);
+}
+.topbar{
+  display:flex;
+  justify-content:space-between;
+  align-items:center;
+  padding:18px 28px;
+  border-bottom:1px solid rgba(255,255,255,0.03);
+}
+.topbar h1{ margin:0; font-size:20px; color:var(--accent); }
+.controls{ display:flex; align-items:center; gap:10px; }
+.badge{ padding:6px 10px; border-radius:8px; font-weight:600; }
+.badge.green{ color:var(--success); }
+.badge.yellow{ color:#ffd76b; }
+.badge.red{ color:var(--danger); }
+
+.container{ display:flex; gap:18px; padding:20px; }
+.left-panel{ flex:2; }
+.right-panel{ flex:1; display:flex; flex-direction:column; gap:18px; }
+
+.card{
+  background:linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01));
+  border-radius:12px; padding:16px; box-shadow:0 8px 30px rgba(2,10,18,0.6); border:1px solid rgba(0,240,255,0.06);
+}
+#metricsCard canvas{ width:100% !important; height:220px !important; }
+
+table{ width:100%; border-collapse:collapse; }
+table thead th{ text-align:left; padding:8px; color:var(--muted); font-size:13px; }
+table tbody td{ padding:10px; border-top:1px solid rgba(255,255,255,0.02); font-size:14px; }
+
+.status-dot{ width:12px; height:12px; border-radius:50%; display:inline-block; margin-right:8px; }
+.dot-green{ background:var(--success); }
+.dot-red{ background:var(--danger); }
