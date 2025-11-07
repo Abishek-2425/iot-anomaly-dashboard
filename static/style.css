@@ -1,47 +1,62 @@
-
+/* static/style.css - Clean light professional theme */
 :root{
-  --bg:#0b0f14;
-  --card:#0f1720;
-  --accent:#00f0ff;
-  --text:#cfefff;
-  --muted:#7ba6b0;
-  --danger:#ff4d6d;
-  --success:#39ff7b;
-  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+  --bg: #f6f8fb;
+  --card: #ffffff;
+  --muted: #6b7280;
+  --accent: #1f7adb;
+  --success: #16a34a;
+  --danger: #ef4444;
+  --soft: #e6eefc;
+  font-family: Inter, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
 }
+*{box-sizing:border-box}
 body{
   margin:0;
-  background: linear-gradient(180deg,#02040a 0%, #071022 100%);
-  color:var(--text);
+  background:var(--bg);
+  color:#0f172a;
+  -webkit-font-smoothing:antialiased;
+  font-size:14px;
 }
 .topbar{
   display:flex;
   justify-content:space-between;
   align-items:center;
   padding:18px 28px;
-  border-bottom:1px solid rgba(255,255,255,0.03);
+  border-bottom:1px solid rgba(15,23,42,0.06);
+  background: linear-gradient(180deg, #ffffff, #fbfdff);
 }
-.topbar h1{ margin:0; font-size:20px; color:var(--accent); }
-.controls{ display:flex; align-items:center; gap:10px; }
-.badge{ padding:6px 10px; border-radius:8px; font-weight:600; }
-.badge.green{ color:var(--success); }
-.badge.yellow{ color:#ffd76b; }
-.badge.red{ color:var(--danger); }
+.title h1{ margin:0; font-size:18px; color:var(--accent); }
+.title .subtitle{ margin:4px 0 0 0; color:var(--muted); font-size:12px; }
 
-.container{ display:flex; gap:18px; padding:20px; }
-.left-panel{ flex:2; }
-.right-panel{ flex:1; display:flex; flex-direction:column; gap:18px; }
+.actions{ display:flex; align-items:center; gap:10px; }
+input[type=file]{ padding:6px; }
+button{ background:var(--accent); color:white; border:none; padding:8px 12px; border-radius:8px; cursor:pointer; font-weight:600; }
+button:hover{ opacity:0.95; }
 
-.card{
-  background:linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01));
-  border-radius:12px; padding:16px; box-shadow:0 8px 30px rgba(2,10,18,0.6); border:1px solid rgba(0,240,255,0.06);
-}
-#metricsCard canvas{ width:100% !important; height:220px !important; }
+.badge{ padding:6px 10px; border-radius:8px; font-weight:600; font-size:13px; }
+.badge.green{ background:linear-gradient(90deg,#e8f3ff, #e6f2ff); color:var(--accent); border:1px solid rgba(31,122,219,0.12); }
+.badge.yellow{ background: #fff7e6; color:#b45309; border:1px solid rgba(212,170,0,0.08);}
+.badge.red{ background:#fff1f2; color:var(--danger); border:1px solid rgba(239,68,68,0.08); }
 
-table{ width:100%; border-collapse:collapse; }
-table thead th{ text-align:left; padding:8px; color:var(--muted); font-size:13px; }
-table tbody td{ padding:10px; border-top:1px solid rgba(255,255,255,0.02); font-size:14px; }
+.main{ display:flex; gap:18px; padding:20px; }
+.left{ flex:2; display:flex; flex-direction:column; gap:18px; }
+.right{ flex:1; display:flex; flex-direction:column; gap:18px; }
 
-.status-dot{ width:12px; height:12px; border-radius:50%; display:inline-block; margin-right:8px; }
+.card{ background:var(--card); border-radius:10px; padding:14px; box-shadow:0 6px 18px rgba(15,23,42,0.06); border:1px solid rgba(15,23,42,0.03); }
+.card h3{ margin:0 0 8px 0; font-size:15px; color:#0b1220; }
+
+.small-row{ display:flex; gap:12px; }
+.mini-card{ flex:1; padding:10px; }
+
+canvas{ width:100% !important; height:220px !important; }
+
+table{ width:100%; border-collapse:collapse; font-size:13px; }
+table thead th{ text-align:left; padding:8px; color:var(--muted); font-weight:600; font-size:12px; border-bottom:1px solid rgba(15,23,42,0.04);}
+table tbody td{ padding:10px 8px; border-bottom:1px solid rgba(15,23,42,0.03); }
+
+.status-dot{ width:10px; height:10px; border-radius:50%; display:inline-block; margin-right:8px; vertical-align:middle; }
 .dot-green{ background:var(--success); }
 .dot-red{ background:var(--danger); }
+
+#alerts{ max-height:220px; overflow:auto; font-size:13px; color:#0b1220; }
+.alert{ padding:10px; border-radius:8px; margin-bottom:8px; background:#fff8f8; border-left:4px solid rgba(239,68,68,0.08); }

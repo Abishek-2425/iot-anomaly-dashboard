@@ -1,15 +1,41 @@
-
-# Run this script to train a model on iot_network_data.csv and save model.pkl
-import pandas as pd
-from sklearn.ensemble import IsolationForest
-import joblib
+# model_train.py
+"""
+Train IsolationForest on iot_network_data.csv.
+Prefers rows where Anomaly==0 (if column exists).
+Saves model.pkl to project root.
+"""
 from pathlib import Path
+import pandas as pd
+import joblib
+from sklearn.ensemble import IsolationForest
 
-data_path = Path(__file__).parent / "iot_network_data.csv"
-df = pd.read_csv(data_path)
-numeric = df.select_dtypes(include=[float,int])
-X = numeric.values
-clf = IsolationForest(n_estimators=100, contamination=0.1, random_state=42)
+BASE = Path(__file__).parent
+DATA_FILE = BASE / "synthetic_iot_dataset.csv"
+MODEL_FILE = BASE / "model.pkl"
+
+if not DATA_FILE.exists():
+    print("Dataset not found at", DATA_FILE)
+    raise SystemExit(1)
+
+df = pd.read_csv(DATA_FILE)
+numeric = df.select_dtypes(include=[int, float])
+if numeric.shape[1] == 0:
+    print("No numeric columns found in dataset.")
+    raise SystemExit(1)
+
+if "Anomaly" in df.columns:
+    normal = df[df["Anomaly"] == 0].select_dtypes(include=[int, float])
+    if normal.shape[0] >= 10:
+        X = normal.values
+        print(f"Training on {normal.shape[0]} normal rows (Anomaly==0).")
+    else:
+        X = numeric.values
+        print("Not enough normal-labeled rows; training on all numeric rows.")
+else:
+    X = numeric.values
+    print("No Anomaly column - training on all numeric rows.")
+
+clf = IsolationForest(n_estimators=200, contamination=0.05, random_state=42)
 clf.fit(X)
-joblib.dump(clf, Path(__file__).parent / "model.pkl")
-print("Trained model saved to model.pkl")
+joblib.dump(clf, MODEL_FILE)
+print("Trained IsolationForest saved to", MODEL_FILE)
