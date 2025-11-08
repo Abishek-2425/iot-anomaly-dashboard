@@ -170,13 +170,13 @@ def upload():
     df.to_csv(DATA_FILE, index=False)
     load_dataset()
 
-    numeric = df.select_dtypes(include=[np.number])
+    numeric = df.select_dtypes(include=[np.number]).drop(columns=["Anomaly"], errors="ignore")
     if numeric.empty:
         return jsonify({"success": False, "error": "Dataset contains no numeric columns"}), 400
 
     # Prefer known normal rows
     if "Anomaly" in df.columns and (df["Anomaly"] == 0).sum() >= 10:
-        train_data = df[df["Anomaly"] == 0].select_dtypes(include=[np.number]).values
+        train_data = df[df["Anomaly"] == 0].select_dtypes(include=[np.number]).drop(columns=["Anomaly"], errors="ignore").values
     else:
         train_data = numeric.values
 

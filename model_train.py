@@ -18,7 +18,7 @@ if not DATA_FILE.exists():
     raise SystemExit(1)
 
 df = pd.read_csv(DATA_FILE)
-numeric = df.select_dtypes(include=[int, float])
+numeric = df.select_dtypes(include=[int, float]).drop(columns=["Anomaly"], errors="ignore")
 if numeric.shape[1] == 0:
     print("No numeric columns found in dataset.")
     raise SystemExit(1)
