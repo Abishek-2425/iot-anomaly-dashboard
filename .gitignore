@@ -76,3 +76,15 @@ bower_components/
 # Cache directories
 .cache/
 .sass-cache/
+
+
+# ppts 
+*.ppt
+*.pptx
+
+# png files
+*.png
+
+# drawio files
+*.drawio
+
