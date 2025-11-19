@@ -42,34 +42,29 @@ function updateCharts(t, h, b){
 
 // Optimized device table update
 function updateDeviceTable(device, t, h, b, status){
+  deviceStatus[device] = {t,h,b,status};
   const tbody = document.querySelector('#deviceTable tbody');
+  tbody.innerHTML = '';
 
-  // Update the device state object
-  deviceStatus[device] = {t, h, b, status};
+  // Only show top 5 devices by the order in deviceStatus
+  const topDevices = Object.keys(deviceStatus).slice(0, 5);
 
-  // Only rebuild table if device is new or changed
-  Object.keys(deviceStatus).forEach(d => {
-    let tr = tbody.querySelector(`tr[data-device="${d}"]`);
+  topDevices.forEach(d => {
     const r = deviceStatus[d];
     const statusHtml = r.status 
-      ? '<span class="status-dot dot-red"></span><strong style="color:#ef4444">ANOMALY</strong>' 
-      : '<span class="status-dot dot-green"></span>Normal';
+      ? ('<span class="status-dot dot-red"></span><strong style="color:#ef4444">ANOMALY</strong>') 
+      : ('<span class="status-dot dot-green"></span>Normal');
 
-    if (!tr) {
-      tr = document.createElement('tr');
-      tr.setAttribute('data-device', d);
-      tbody.appendChild(tr);
-    }
-
-    tr.innerHTML = `
-      <td>${d}</td>
-      <td>${typeof r.t === 'number' ? r.t.toFixed(2) : r.t}</td>
-      <td>${typeof r.h === 'number' ? r.h.toFixed(2) : r.h}</td>
-      <td>${typeof r.b === 'number' ? r.b.toFixed(2) : r.b}</td>
-      <td>${statusHtml}</td>
-    `;
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td>${d}</td>
+                    <td>${typeof r.t === 'number' ? r.t.toFixed(2) : r.t}</td>
+                    <td>${typeof r.h === 'number' ? r.h.toFixed(2) : r.h}</td>
+                    <td>${typeof r.b === 'number' ? r.b.toFixed(2) : r.b}</td>
+                    <td>${statusHtml}</td>`;
+    tbody.appendChild(tr);
   });
 }
+
 
 function pushAlert(msg){
   const alerts = document.getElementById('alerts');
