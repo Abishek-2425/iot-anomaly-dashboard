@@ -13,7 +13,7 @@ How to run locally:
 1. Install dependencies:
    pip install flask scikit-learn pandas joblib
 
-2. Place a CSV 'iot_network_data.csv' in the same folder (or upload via UI) and optionally run:
+2. Place a CSV 'synthetic_iot_dataset.csv' in the same folder (or upload via UI) and optionally run:
    python model_train.py
 
 3. Run the app:

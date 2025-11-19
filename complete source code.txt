@@ -1,0 +1,541 @@
+--------------------------------------------------------------------------------
+/app.py:
+--------------------------------------------------------------------------------
+  1 | # app.py
+  2 | 
+  3 | from flask import Flask, render_template, request, jsonify, send_from_directory
+  4 | from pathlib import Path
+  5 | import pandas as pd
+  6 | import numpy as np
+  7 | import joblib
+  8 | 
+  9 | app = Flask(__name__)
+ 10 | BASE = Path(__file__).parent
+ 11 | 
+ 12 | # Files
+ 13 | DATA_FILE = BASE / "synthetic_iot_dataset.csv"
+ 14 | MODEL_FILE = BASE / "model.pkl"
+ 15 | 
+ 16 | # Global runtime state
+ 17 | df_source = pd.DataFrame()
+ 18 | model = None
+ 19 | top_devices = []
+ 20 | device_state = {}     # live simulated state (temp/hum/bat)
+ 21 | TOP_K = 5
+ 22 | 
+ 23 | 
+ 24 | # ----------------------------------------------------
+ 25 | # Helper: Identify sensor feature names in dataset
+ 26 | # ----------------------------------------------------
+ 27 | def detect_features(df):
+ 28 |     numeric = df.select_dtypes(include=[np.number]).columns.tolist()
+ 29 | 
+ 30 |     feature_map = {
+ 31 |         "temp": None,
+ 32 |         "hum": None,
+ 33 |         "bat": None
+ 34 |     }
+ 35 | 
+ 36 |     for candidates, key in [
+ 37 |         (["Temperature", "Temp", "temperature", "latency_ms"], "temp"),
+ 38 |         (["Humidity", "Hum", "humidity", "jitter_ms"], "hum"),
+ 39 |         (["Battery_Level", "Battery", "battery", "throughput_kbps"], "bat")
+ 40 |     ]:
+ 41 |         for c in candidates:
+ 42 |             if c in numeric:
+ 43 |                 feature_map[key] = c
+ 44 |                 break
+ 45 | 
+ 46 |     # fallback: just use numeric columns in order
+ 47 |     if feature_map["temp"] is None and len(numeric) > 0:
+ 48 |         feature_map["temp"] = numeric[0]
+ 49 |     if feature_map["hum"] is None and len(numeric) > 1:
+ 50 |         feature_map["hum"] = numeric[1]
+ 51 |     if feature_map["bat"] is None and len(numeric) > 2:
+ 52 |         feature_map["bat"] = numeric[2]
+ 53 | 
+ 54 |     return feature_map
+ 55 | 
+ 56 | 
+ 57 | # ----------------------------------------------------
+ 58 | # Load dataset & initialize device simulation
+ 59 | # ----------------------------------------------------
+ 60 | def load_dataset():
+ 61 |     global df_source, top_devices, device_state
+ 62 | 
+ 63 |     if not DATA_FILE.exists():
+ 64 |         df_source = pd.DataFrame()
+ 65 |         top_devices = []
+ 66 |         device_state = {}
+ 67 |         return
+ 68 | 
+ 69 |     df_source = pd.read_csv(DATA_FILE)
+ 70 | 
+ 71 |     # Ensure Device_ID exists
+ 72 |     if "Device_ID" not in df_source.columns:
+ 73 |         df_source.insert(0, "Device_ID", [f"Device_{i%50+1}" for i in range(len(df_source))])
+ 74 | 
+ 75 |     # Pick top devices based on frequency
+ 76 |     counts = df_source["Device_ID"].value_counts()
+ 77 |     top_devices = list(counts.index[:TOP_K])
+ 78 | 
+ 79 |     features = detect_features(df_source)
+ 80 | 
+ 81 |     # Base values = mean per device for realism
+ 82 |     device_state = {}
+ 83 |     for dev in top_devices:
+ 84 |         subset = df_source[df_source["Device_ID"] == dev]
+ 85 |         means = subset.mean(numeric_only=True) if not subset.empty else {}
+ 86 | 
+ 87 |         device_state[dev] = {
+ 88 |             "temp_key": features["temp"],
+ 89 |             "hum_key": features["hum"],
+ 90 |             "bat_key": features["bat"],
+ 91 |             "temp": float(means.get(features["temp"], 25.0)),
+ 92 |             "hum": float(means.get(features["hum"], 45.0)),
+ 93 |             "bat": float(means.get(features["bat"], 80.0))
+ 94 |         }
+ 95 | 
+ 96 | 
+ 97 | load_dataset()
+ 98 | 
+ 99 | 
+100 | # ----------------------------------------------------
+101 | # Try loading model
+102 | # ----------------------------------------------------
+103 | if MODEL_FILE.exists():
+104 |     try:
+105 |         model = joblib.load(MODEL_FILE)
+106 |         print("✅ Loaded model.pkl")
+107 |     except Exception:
+108 |         print("⚠️ Failed to load model, will rebuild on upload.")
+109 |         model = None
+110 | 
+111 | 
+112 | # ----------------------------------------------------
+113 | # Simulated Live Stream
+114 | # ----------------------------------------------------
+115 | np.random.seed(7)
+116 | 
+117 | def generate_live_data():
+118 |     """Simulate new readings for each top device."""
+119 |     rows = []
+120 |     for dev, st in device_state.items():
+121 | 
+122 |         # Natural drift + occasional anomalies
+123 |         st["temp"] += np.random.normal(0, 0.15)
+124 |         st["hum"] += np.random.normal(0, 0.20)
+125 |         st["bat"] -= abs(np.random.normal(0.03, 0.01))
+126 | 
+127 |         if np.random.rand() < 0.06:  # inject anomaly
+128 |             st["temp"] += np.random.uniform(5, 20)
+129 |             st["hum"] += np.random.uniform(10, 35)
+130 |             st["bat"] -= np.random.uniform(5, 20)
+131 | 
+132 |         st["bat"] = max(st["bat"], 0)
+133 | 
+134 |         row = {
+135 |             "Device_ID": dev,
+136 |             st["temp_key"]: round(st["temp"], 3),
+137 |             st["hum_key"]: round(st["hum"], 3),
+138 |             st["bat_key"]: round(st["bat"], 3)
+139 |         }
+140 |         rows.append(row)
+141 | 
+142 |     return rows
+143 | 
+144 | 
+145 | # ----------------------------------------------------
+146 | # Flask Routes
+147 | # ----------------------------------------------------
+148 | @app.route("/")
+149 | def index():
+150 |     return render_template("dashboard.html")
+151 | 
+152 | 
+153 | @app.route("/upload", methods=["POST"])
+154 | def upload():
+155 |     global model
+156 |     file = request.files.get("file")
+157 | 
+158 |     if not file:
+159 |         return jsonify({"success": False, "error": "No file provided"}), 400
+160 | 
+161 |     # Save and re-load dataset
+162 |     save_path = BASE / "uploaded.csv"
+163 |     file.save(save_path)
+164 | 
+165 |     try:
+166 |         df = pd.read_csv(save_path)
+167 |     except Exception:
+168 |         return jsonify({"success": False, "error": "Invalid CSV file"}), 400
+169 | 
+170 |     df.to_csv(DATA_FILE, index=False)
+171 |     load_dataset()
+172 | 
+173 |     numeric = df.select_dtypes(include=[np.number]).drop(columns=["Anomaly"], errors="ignore")
+174 |     if numeric.empty:
+175 |         return jsonify({"success": False, "error": "Dataset contains no numeric columns"}), 400
+176 | 
+177 |     # Prefer known normal rows
+178 |     if "Anomaly" in df.columns and (df["Anomaly"] == 0).sum() >= 10:
+179 |         train_data = df[df["Anomaly"] == 0].select_dtypes(include=[np.number]).drop(columns=["Anomaly"], errors="ignore").values
+180 |     else:
+181 |         train_data = numeric.values
+182 | 
+183 |     from sklearn.ensemble import IsolationForest
+184 |     clf = IsolationForest(n_estimators=200, contamination=0.05, random_state=42)
+185 |     clf.fit(train_data)
+186 | 
+187 |     joblib.dump(clf, MODEL_FILE)
+188 |     model = clf
+189 | 
+190 |     return jsonify({"success": True, "message": "Dataset uploaded and model trained successfully."})
+191 | 
+192 | 
+193 | @app.route("/data/latest")
+194 | def live_data():
+195 |     if df_source.empty or not top_devices:
+196 |         return jsonify({"success": False, "error": "No dataset loaded."}), 400
+197 | 
+198 |     rows = generate_live_data()
+199 |     df_live = pd.DataFrame(rows)
+200 | 
+201 |     numeric = df_live.select_dtypes(include=[np.number]).values
+202 |     preds = model.predict(numeric) if model is not None else [1] * len(df_live)
+203 | 
+204 |     output = []
+205 |     for r, p in zip(rows, preds):
+206 |         r["anomaly"] = 1 if p == -1 else 0
+207 |         output.append(r)
+208 | 
+209 |     return jsonify({"success": True, "rows": output})
+210 | 
+211 | 
+212 | @app.route("/static/<path:filename>")
+213 | def static_files(filename):
+214 |     return send_from_directory(BASE / "static", filename)
+215 | 
+216 | 
+217 | # ----------------------------------------------------
+218 | # Run
+219 | # ----------------------------------------------------
+220 | if __name__ == "__main__":
+221 |     print("🚀 Starting Dashboard at http://localhost:5000")
+222 |     app.run(debug=True, port=5000)
+223 | 
+
+
+--------------------------------------------------------------------------------
+/synthetic_iot_dataset.csv:
+--------------------------------------------------------------------------------
+   1 | Device_ID,Temperature,Humidity,Battery_Level,Anomaly
+   2 | Device_1,32.483570765056164,43.24821725025618,43,0
+   3 | Device_2,29.308678494144075,48.55481329284482,70,0
+   4 | Device_3,33.23844269050346,42.07580079000039,29,0
+   5 | Device_4,37.61514928204013,46.9203847036096,91,0
+
+--------------------------------------------------------------------------------
+/model_train.py:
+--------------------------------------------------------------------------------
+ 1 | # model_train.py
+ 2 | """
+ 3 | Train IsolationForest on synthetic_iot_dataset.csv.
+ 4 | Prefers rows where Anomaly==0 (if column exists).
+ 5 | Saves if_model.pkl to project root.
+ 6 | """
+ 7 | from pathlib import Path
+ 8 | import pandas as pd
+ 9 | import joblib
+10 | from sklearn.ensemble import IsolationForest
+11 | 
+12 | BASE = Path(__file__).parent
+13 | DATA_FILE = BASE / "synthetic_iot_dataset.csv"
+14 | MODEL_FILE = BASE / "base_if_model.pkl"
+15 | 
+16 | if not DATA_FILE.exists():
+17 |     print("Dataset not found at", DATA_FILE)
+18 |     raise SystemExit(1)
+19 | 
+20 | df = pd.read_csv(DATA_FILE)
+21 | numeric = df.select_dtypes(include=[int, float]).drop(columns=["Anomaly"], errors="ignore")
+22 | if numeric.shape[1] == 0:
+23 |     print("No numeric columns found in dataset.")
+24 |     raise SystemExit(1)
+25 | 
+26 | if "Anomaly" in df.columns:
+27 |     normal = df[df["Anomaly"] == 0].select_dtypes(include=[int, float])
+28 |     if normal.shape[0] >= 10:
+29 |         X = normal.values
+30 |         print(f"Training on {normal.shape[0]} normal rows (Anomaly==0).")
+31 |     else:
+32 |         X = numeric.values
+33 |         print("Not enough normal-labeled rows; training on all numeric rows.")
+34 | else:
+35 |     X = numeric.values
+36 |     print("No Anomaly column - training on all numeric rows.")
+37 | 
+38 | clf = IsolationForest(n_estimators=200, contamination=0.05, random_state=42)
+39 | clf.fit(X)
+40 | joblib.dump(clf, MODEL_FILE)
+41 | print("Trained IsolationForest saved to", MODEL_FILE)
+42 | 
+
+
+--------------------------------------------------------------------------------
+/static/charts.js:
+--------------------------------------------------------------------------------
+  1 | // static/charts.js - Clean Chart.js logic for real-time simulation (Top 5 devices)
+  2 | 
+  3 | let tempChart, humChart, batChart;
+  4 | let labels = [];
+  5 | let tempData = [], humData = [], batData = [];
+  6 | let deviceStatus = {};
+  7 | 
+  8 | function createCharts(){
+  9 |   const ctxT = document.getElementById('chartTemp').getContext('2d');
+ 10 |   tempChart = new Chart(ctxT, {
+ 11 |     type: 'line',
+ 12 |     data: { labels: labels, datasets: [{ label: 'Temperature', data: tempData, fill:true, borderWidth:2, pointRadius:0, backgroundColor:'rgba(31,122,219,0.08)', borderColor:'#1f7adb' }]},
+ 13 |     options: { responsive:true, maintainAspectRatio:false, plugins:{ legend:{display:false}}, scales:{ x:{ display:false }, y:{ beginAtZero:false } } }
+ 14 |   });
+ 15 | 
+ 16 |   const ctxH = document.getElementById('chartHum').getContext('2d');
+ 17 |   humChart = new Chart(ctxH, {
+ 18 |     type: 'line',
+ 19 |     data: { labels: labels, datasets: [{ label: 'Humidity', data: humData, fill:true, borderWidth:2, pointRadius:0, backgroundColor:'rgba(155,155,255,0.06)', borderColor:'#6b72ff' }]},
+ 20 |     options: { responsive:true, maintainAspectRatio:false, plugins:{ legend:{display:false}}, scales:{ x:{ display:false } } }
+ 21 |   });
+ 22 | 
+ 23 |   const ctxB = document.getElementById('chartBat').getContext('2d');
+ 24 |   batChart = new Chart(ctxB, {
+ 25 |     type: 'line',
+ 26 |     data: { labels: labels, datasets: [{ label: 'Battery', data: batData, fill:true, borderWidth:2, pointRadius:0, backgroundColor:'rgba(22,163,74,0.06)', borderColor:'#16a34a' }]},
+ 27 |     options: { responsive:true, maintainAspectRatio:false, plugins:{ legend:{display:false}}, scales:{ x:{ display:false }, y:{ beginAtZero:true, max:110 } } }
+ 28 |   });
+ 29 | }
+ 30 | 
+ 31 | function updateCharts(t, h, b){
+ 32 |   const timeLabel = new Date().toLocaleTimeString();
+ 33 |   labels.push(timeLabel);
+ 34 |   if(labels.length>40){
+ 35 |     labels.shift(); tempData.shift(); humData.shift(); batData.shift();
+ 36 |   }
+ 37 |   tempData.push(t); humData.push(h); batData.push(b);
+ 38 |   tempChart.update(); humChart.update(); batChart.update();
+ 39 | }
+ 40 | 
+ 41 | function updateDeviceTable(device, t, h, b, status){
+ 42 |   deviceStatus[device] = {t,h,b,status};
+ 43 |   const tbody = document.querySelector('#deviceTable tbody');
+ 44 |   tbody.innerHTML = '';
+ 45 |   Object.keys(deviceStatus).forEach(d => {
+ 46 |     const r = deviceStatus[d];
+ 47 |     const statusHtml = r.status ? ('<span class="status-dot dot-red"></span><strong style="color:#ef4444">ANOMALY</strong>') : ('<span class="status-dot dot-green"></span>Normal');
+ 48 |     const tr = document.createElement('tr');
+ 49 |     tr.innerHTML = `<td>${d}</td><td>${typeof r.t === 'number' ? r.t.toFixed(2) : r.t}</td><td>${typeof r.h === 'number' ? r.h.toFixed(2) : r.h}</td><td>${typeof r.b === 'number' ? r.b.toFixed(2) : r.b}</td><td>${statusHtml}</td>`;
+ 50 |     tbody.appendChild(tr);
+ 51 |   });
+ 52 | }
+ 53 | 
+ 54 | function pushAlert(msg){
+ 55 |   const alerts = document.getElementById('alerts');
+ 56 |   const div = document.createElement('div');
+ 57 |   div.className='alert';
+ 58 |   div.innerText = `[${new Date().toLocaleTimeString()}] ` + msg;
+ 59 |   alerts.prepend(div);
+ 60 |   while(alerts.children.length>8) alerts.removeChild(alerts.lastChild);
+ 61 | }
+ 62 | 
+ 63 | async function fetchLatest(){
+ 64 |   try{
+ 65 |     const res = await fetch('/data/latest');
+ 66 |     const j = await res.json();
+ 67 |     if(!j.success){ console.error('No data', j); return; }
+ 68 |     const rows = j.rows;
+ 69 |     // process each top-device row
+ 70 |     rows.forEach(row => {
+ 71 |       const device = row.Device_ID || row.device || ("dev_"+Math.floor(Math.random()*999));
+ 72 |       // heuristics for keys
+ 73 |       const keys = Object.keys(row);
+ 74 |       const tKey = keys.find(k=>/temp/i.test(k)) || keys.find(k=>/temperature/i.test(k));
+ 75 |       const hKey = keys.find(k=>/hum/i.test(k)) || keys.find(k=>/humidity/i.test(k));
+ 76 |       const bKey = keys.find(k=>/bat/i.test(k)) || keys.find(k=>/battery/i.test(k));
+ 77 |       const t = tKey ? parseFloat(row[tKey]) : 0;
+ 78 |       const h = hKey ? parseFloat(row[hKey]) : 0;
+ 79 |       const b = bKey ? parseFloat(row[bKey]) : 0;
+ 80 |       const isAnom = row.anomaly ? 1 : 0;
+ 81 |       updateCharts(t,h,b);
+ 82 |       updateDeviceTable(device, t, h, b, isAnom);
+ 83 |       if(isAnom){
+ 84 |         pushAlert(`${device} flagged as anomaly (score=${row.score !== null ? row.score.toFixed(3) : 'n/a'})`);
+ 85 |         document.getElementById('statusBadge').className='badge red';
+ 86 |         document.getElementById('statusBadge').innerText='ALERT';
+ 87 |       } else {
+ 88 |         document.getElementById('statusBadge').className='badge green';
+ 89 |         document.getElementById('statusBadge').innerText='LIVE';
+ 90 |       }
+ 91 |     });
+ 92 |   }catch(e){
+ 93 |     console.error(e);
+ 94 |   }
+ 95 | }
+ 96 | 
+ 97 | window.addEventListener('load', ()=>{
+ 98 |   createCharts();
+ 99 |   // warm-up fetches
+100 |   for(let i=0;i<4;i++) setTimeout(fetchLatest, i*200);
+101 |   // poll regularly
+102 |   setInterval(fetchLatest, 1000);
+103 | });
+104 | 
+
+
+--------------------------------------------------------------------------------
+/static/style.css:
+--------------------------------------------------------------------------------
+ 1 | /* static/style.css - Clean light professional theme */
+ 2 | :root{
+ 3 |   --bg: #f6f8fb;
+ 4 |   --card: #ffffff;
+ 5 |   --muted: #6b7280;
+ 6 |   --accent: #1f7adb;
+ 7 |   --success: #16a34a;
+ 8 |   --danger: #ef4444;
+ 9 |   --soft: #e6eefc;
+10 |   font-family: Inter, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+11 | }
+12 | *{box-sizing:border-box}
+13 | body{
+14 |   margin:0;
+15 |   background:var(--bg);
+16 |   color:#0f172a;
+17 |   -webkit-font-smoothing:antialiased;
+18 |   font-size:14px;
+19 | }
+20 | .topbar{
+21 |   display:flex;
+22 |   justify-content:space-between;
+23 |   align-items:center;
+24 |   padding:18px 28px;
+25 |   border-bottom:1px solid rgba(15,23,42,0.06);
+26 |   background: linear-gradient(180deg, #ffffff, #fbfdff);
+27 | }
+28 | .title h1{ margin:0; font-size:18px; color:var(--accent); }
+29 | .title .subtitle{ margin:4px 0 0 0; color:var(--muted); font-size:12px; }
+30 | 
+31 | .actions{ display:flex; align-items:center; gap:10px; }
+32 | input[type=file]{ padding:6px; }
+33 | button{ background:var(--accent); color:white; border:none; padding:8px 12px; border-radius:8px; cursor:pointer; font-weight:600; }
+34 | button:hover{ opacity:0.95; }
+35 | 
+36 | .badge{ padding:6px 10px; border-radius:8px; font-weight:600; font-size:13px; }
+37 | .badge.green{ background:linear-gradient(90deg,#e8f3ff, #e6f2ff); color:var(--accent); border:1px solid rgba(31,122,219,0.12); }
+38 | .badge.yellow{ background: #fff7e6; color:#b45309; border:1px solid rgba(212,170,0,0.08);}
+39 | .badge.red{ background:#fff1f2; color:var(--danger); border:1px solid rgba(239,68,68,0.08); }
+40 | 
+41 | .main{ display:flex; gap:18px; padding:20px; }
+42 | .left{ flex:2; display:flex; flex-direction:column; gap:18px; }
+43 | .right{ flex:1; display:flex; flex-direction:column; gap:18px; }
+44 | 
+45 | .card{ background:var(--card); border-radius:10px; padding:14px; box-shadow:0 6px 18px rgba(15,23,42,0.06); border:1px solid rgba(15,23,42,0.03); }
+46 | .card h3{ margin:0 0 8px 0; font-size:15px; color:#0b1220; }
+47 | 
+48 | .small-row{ display:flex; gap:12px; }
+49 | .mini-card{ flex:1; padding:10px; }
+50 | 
+51 | canvas{ width:100% !important; height:220px !important; }
+52 | 
+53 | table{ width:100%; border-collapse:collapse; font-size:13px; }
+54 | table thead th{ text-align:left; padding:8px; color:var(--muted); font-weight:600; font-size:12px; border-bottom:1px solid rgba(15,23,42,0.04);}
+55 | table tbody td{ padding:10px 8px; border-bottom:1px solid rgba(15,23,42,0.03); }
+56 | 
+57 | .status-dot{ width:10px; height:10px; border-radius:50%; display:inline-block; margin-right:8px; vertical-align:middle; }
+58 | .dot-green{ background:var(--success); }
+59 | .dot-red{ background:var(--danger); }
+60 | 
+61 | #alerts{ max-height:220px; overflow:auto; font-size:13px; color:#0b1220; }
+62 | .alert{ padding:10px; border-radius:8px; margin-bottom:8px; background:#fff8f8; border-left:4px solid rgba(239,68,68,0.08); }
+63 | 
+
+
+--------------------------------------------------------------------------------
+/templates/dashboard.html:
+--------------------------------------------------------------------------------
+ 1 | <!doctype html>
+ 2 | <html lang="en">
+ 3 |   <head>
+ 4 |     <meta charset="utf-8">
+ 5 |     <title>IoT Anomaly Dashboard</title>
+ 6 |     <meta name="viewport" content="width=device-width, initial-scale=1">
+ 7 |     <link rel="stylesheet" href="/static/style.css">
+ 8 |     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+ 9 |   </head>
+10 |   <body>
+11 |     <div class="topbar">
+12 |       <div class="title">
+13 |         <h1>IoT Monitoring — Anomaly Detection</h1>
+14 |         <p class="subtitle">Real-time simulation from uploaded dataset (Top 5 devices)</p>
+15 |       </div>
+16 |       <div class="actions">
+17 |         <input id="fileInput" type="file" accept=".csv">
+18 |         <button id="uploadBtn">Upload & Train</button>
+19 |         <span id="statusBadge" class="badge green">LIVE</span>
+20 |       </div>
+21 |     </div>
+22 | 
+23 |     <div class="main">
+24 |       <div class="left">
+25 |         <div class="card">
+26 |           <h3>Live Metrics</h3>
+27 |           <canvas id="chartTemp"></canvas>
+28 |         </div>
+29 |         <div class="card small-row">
+30 |           <div class="mini-card"><h4>Humidity</h4><canvas id="chartHum"></canvas></div>
+31 |           <div class="mini-card"><h4>Battery</h4><canvas id="chartBat"></canvas></div>
+32 |         </div>
+33 |       </div>
+34 | 
+35 |       <div class="right">
+36 |         <div class="card">
+37 |           <h3>Top 5 Devices (Live)</h3>
+38 |           <table id="deviceTable">
+39 |             <thead><tr><th>Device</th><th>Temperature</th><th>Humidity</th><th>Battery</th><th>Status</th></tr></thead>
+40 |             <tbody></tbody>
+41 |           </table>
+42 |         </div>
+43 | 
+44 |         <div class="card">
+45 |           <h3>Recent Alerts</h3>
+46 |           <div id="alerts"></div>
+47 |         </div>
+48 |       </div>
+49 |     </div>
+50 | 
+51 |     <script src="/static/charts.js"></script>
+52 |     <script>
+53 |       // Upload button
+54 |       document.getElementById('uploadBtn').addEventListener('click', async () => {
+55 |         const fi = document.getElementById('fileInput');
+56 |         if (!fi.files.length) { alert('Choose CSV file first'); return; }
+57 |         const fd = new FormData();
+58 |         fd.append('file', fi.files[0]);
+59 |         document.getElementById('statusBadge').innerText = 'TRAINING...';
+60 |         document.getElementById('statusBadge').className = 'badge yellow';
+61 |         const res = await fetch('/upload', { method: 'POST', body: fd });
+62 |         const j = await res.json();
+63 |         if (j.success) {
+64 |           alert('Uploaded and model trained on server.');
+65 |           document.getElementById('statusBadge').innerText = 'LIVE';
+66 |           document.getElementById('statusBadge').className = 'badge green';
+67 |         } else {
+68 |           alert('Upload failed: ' + (j.error || JSON.stringify(j)));
+69 |           document.getElementById('statusBadge').innerText = 'ERROR';
+70 |           document.getElementById('statusBadge').className = 'badge red';
+71 |         }
+72 |       });
+73 |     </script>
+74 |   </body>
+75 | </html>
+76 | 
+

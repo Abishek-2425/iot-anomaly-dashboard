@@ -10,8 +10,8 @@ app = Flask(__name__)
 BASE = Path(__file__).parent
 
 # Files
-DATA_FILE = BASE / "iot_network_data.csv"
-MODEL_FILE = BASE / "model.pkl"
+DATA_FILE = BASE / "synthetic_iot_dataset.csv"
+MODEL_FILE = BASE / "models/base_if_model.pkl"
 
 # Global runtime state
 df_source = pd.DataFrame()
@@ -103,7 +103,7 @@ load_dataset()
 if MODEL_FILE.exists():
     try:
         model = joblib.load(MODEL_FILE)
-        print("✅ Loaded model.pkl")
+        print("✅ Loaded base_if_model.pkl")
     except Exception:
         print("⚠️ Failed to load model, will rebuild on upload.")
         model = None
@@ -219,4 +219,4 @@ def static_files(filename):
 # ----------------------------------------------------
 if __name__ == "__main__":
     print("🚀 Starting Dashboard at http://localhost:5000")
-    app.run(debug=True, port=5000)
+    app.run(host="0.0.0.0", debug=True, port=5000)
