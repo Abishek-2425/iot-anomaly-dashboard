@@ -38,30 +38,36 @@ function updateCharts(t, h, b){
   tempChart.update(); humChart.update(); batChart.update();
 }
 
-function updateDeviceTable(rows){
+// update device table start
+
+// Optimized device table update
+function updateDeviceTable(device, t, h, b, status){
   const tbody = document.querySelector('#deviceTable tbody');
-  tbody.innerHTML = ''; // clear once
 
-  rows.forEach(row => {
-    const device = row.Device_ID;
-    const keys = Object.keys(row);
-    const tKey = keys.find(k=>/temp/i.test(k)) || keys.find(k=>/temperature/i.test(k));
-    const hKey = keys.find(k=>/hum/i.test(k)) || keys.find(k=>/humidity/i.test(k));
-    const bKey = keys.find(k=>/bat/i.test(k)) || keys.find(k=>/battery/i.test(k));
-    const t = tKey ? parseFloat(row[tKey]) : 0;
-    const h = hKey ? parseFloat(row[hKey]) : 0;
-    const b = bKey ? parseFloat(row[bKey]) : 0;
-    const isAnom = row.anomaly ? 1 : 0;
+  // Update the device state object
+  deviceStatus[device] = {t, h, b, status};
 
-    deviceStatus[device] = {t,h,b,status:isAnom};
+  // Only rebuild table if device is new or changed
+  Object.keys(deviceStatus).forEach(d => {
+    let tr = tbody.querySelector(`tr[data-device="${d}"]`);
+    const r = deviceStatus[d];
+    const statusHtml = r.status 
+      ? '<span class="status-dot dot-red"></span><strong style="color:#ef4444">ANOMALY</strong>' 
+      : '<span class="status-dot dot-green"></span>Normal';
 
-    const statusHtml = isAnom ? 
-      '<span class="status-dot dot-red"></span><strong style="color:#ef4444">ANOMALY</strong>' :
-      '<span class="status-dot dot-green"></span>Normal';
+    if (!tr) {
+      tr = document.createElement('tr');
+      tr.setAttribute('data-device', d);
+      tbody.appendChild(tr);
+    }
 
-    const tr = document.createElement('tr');
-    tr.innerHTML = `<td>${device}</td><td>${t.toFixed(2)}</td><td>${h.toFixed(2)}</td><td>${b.toFixed(2)}</td><td>${statusHtml}</td>`;
-    tbody.appendChild(tr);
+    tr.innerHTML = `
+      <td>${d}</td>
+      <td>${typeof r.t === 'number' ? r.t.toFixed(2) : r.t}</td>
+      <td>${typeof r.h === 'number' ? r.h.toFixed(2) : r.h}</td>
+      <td>${typeof r.b === 'number' ? r.b.toFixed(2) : r.b}</td>
+      <td>${statusHtml}</td>
+    `;
   });
 }
 
@@ -74,40 +80,44 @@ function pushAlert(msg){
   while(alerts.children.length>8) alerts.removeChild(alerts.lastChild);
 }
 
+// Optimized fetchLatest
 async function fetchLatest(){
-  try{
+  try {
     const res = await fetch('/data/latest');
     const j = await res.json();
     if(!j.success){ console.error('No data', j); return; }
-    const rows = j.rows;
 
-    // Update charts & device table
-    rows.forEach(row => {
+    j.rows.forEach(row => {
+      const device = row.Device_ID || row.device || ("dev_"+Math.floor(Math.random()*999));
       const keys = Object.keys(row);
       const tKey = keys.find(k=>/temp/i.test(k)) || keys.find(k=>/temperature/i.test(k));
       const hKey = keys.find(k=>/hum/i.test(k)) || keys.find(k=>/humidity/i.test(k));
       const bKey = keys.find(k=>/bat/i.test(k)) || keys.find(k=>/battery/i.test(k));
-      updateCharts(tKey ? parseFloat(row[tKey]) : 0,
-                   hKey ? parseFloat(row[hKey]) : 0,
-                   bKey ? parseFloat(row[bKey]) : 0);
-    });
+      const t = tKey ? parseFloat(row[tKey]) : 0;
+      const h = hKey ? parseFloat(row[hKey]) : 0;
+      const b = bKey ? parseFloat(row[bKey]) : 0;
+      const isAnom = row.anomaly ? 1 : 0;
 
-    updateDeviceTable(rows);  // pass all rows once
+      updateCharts(t,h,b);
+      updateDeviceTable(device, t, h, b, isAnom);
 
-    // Alerts
-    rows.forEach(row => {
-      if(row.anomaly){
-        pushAlert(`${row.Device_ID} flagged as anomaly (score=${row.score.toFixed(3)})`);
-        document.getElementById('statusBadge').className='badge red';
-        document.getElementById('statusBadge').innerText='ALERT';
+      // Handle alerts
+      const statusBadge = document.getElementById('statusBadge');
+      if(isAnom){
+        pushAlert(`${device} flagged as anomaly`);
+        statusBadge.className='badge red';
+        statusBadge.innerText='ALERT';
+      } else {
+        statusBadge.className='badge green';
+        statusBadge.innerText='LIVE';
       }
     });
-
-  }catch(e){
+  } catch(e){
     console.error(e);
   }
 }
 
+// fatch latest end
 
 window.addEventListener('load', ()=>{
   createCharts();
