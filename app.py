@@ -115,31 +115,51 @@ if MODEL_FILE.exists():
 np.random.seed(7)
 
 def generate_live_data():
-    """Simulate new readings for each top device."""
+    """Simulate live sensor readings for each top device with realistic drift and occasional anomalies."""
     rows = []
     for dev, st in device_state.items():
 
-        # Natural drift + occasional anomalies
-        st["temp"] += np.random.normal(0, 0.15)
-        st["hum"] += np.random.normal(0, 0.20)
-        st["bat"] -= abs(np.random.normal(0.03, 0.01))
+        # Historical means for controlled drift
+        mean_temp = st.get("mean_temp", st["temp"])
+        mean_hum = st.get("mean_hum", st["hum"])
+        mean_bat = st.get("mean_bat", st["bat"])
 
-        if np.random.rand() < 0.06:  # inject anomaly
-            st["temp"] += np.random.uniform(5, 20)
-            st["hum"] += np.random.uniform(10, 35)
-            st["bat"] -= np.random.uniform(5, 20)
+        # Save historical mean once
+        if "mean_temp" not in st:
+            st["mean_temp"] = mean_temp
+            st["mean_hum"] = mean_hum
+            st["mean_bat"] = mean_bat
 
-        st["bat"] = max(st["bat"], 0)
+        # Apply small normal drift
+        st["temp"] += np.random.normal(0, 0.5)
+        st["hum"]  += np.random.normal(0, 1.0)
+        st["bat"]  += np.random.normal(0, 0.3)
 
+        # Occasional anomaly spike (rare)
+        if np.random.rand() < 0.05:  # 5% chance
+            st["temp"] += np.random.uniform(5, 15)
+            st["hum"]  += np.random.uniform(10, 30)
+            st["bat"]  -= np.random.uniform(5, 15)
+
+        # Clamp values to realistic bounds
+        st["temp"] = np.clip(st["temp"], mean_temp - 5, mean_temp + 5)
+        st["hum"]  = np.clip(st["hum"], mean_hum - 10, mean_hum + 10)
+        st["bat"]  = np.clip(st["bat"], 0, 100)
+
+        # Build row
         row = {
             "Device_ID": dev,
-            st["temp_key"]: round(st["temp"], 3),
-            st["hum_key"]: round(st["hum"], 3),
-            st["bat_key"]: round(st["bat"], 3)
+            st["temp_key"]: round(st["temp"], 2),
+            st["hum_key"]: round(st["hum"], 2),
+            st["bat_key"]: round(st["bat"], 2)
         }
+
         rows.append(row)
 
     return rows
+
+
+
 
 
 # ----------------------------------------------------
