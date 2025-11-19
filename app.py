@@ -200,10 +200,12 @@ def live_data():
 
     numeric = df_live.select_dtypes(include=[np.number]).values
     preds = model.predict(numeric) if model is not None else [1] * len(df_live)
+    scores = model.decision_function(numeric) if model is not None else [0] * len(df_live)
 
     output = []
-    for r, p in zip(rows, preds):
+    for r, p, s in zip(rows, preds, scores):
         r["anomaly"] = 1 if p == -1 else 0
+        r["score"] = float(s)  # include score for alerts
         output.append(r)
 
     return jsonify({"success": True, "rows": output})

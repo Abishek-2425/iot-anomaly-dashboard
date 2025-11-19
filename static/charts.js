@@ -38,15 +38,29 @@ function updateCharts(t, h, b){
   tempChart.update(); humChart.update(); batChart.update();
 }
 
-function updateDeviceTable(device, t, h, b, status){
-  deviceStatus[device] = {t,h,b,status};
+function updateDeviceTable(rows){
   const tbody = document.querySelector('#deviceTable tbody');
-  tbody.innerHTML = '';
-  Object.keys(deviceStatus).forEach(d => {
-    const r = deviceStatus[d];
-    const statusHtml = r.status ? ('<span class="status-dot dot-red"></span><strong style="color:#ef4444">ANOMALY</strong>') : ('<span class="status-dot dot-green"></span>Normal');
+  tbody.innerHTML = ''; // clear once
+
+  rows.forEach(row => {
+    const device = row.Device_ID;
+    const keys = Object.keys(row);
+    const tKey = keys.find(k=>/temp/i.test(k)) || keys.find(k=>/temperature/i.test(k));
+    const hKey = keys.find(k=>/hum/i.test(k)) || keys.find(k=>/humidity/i.test(k));
+    const bKey = keys.find(k=>/bat/i.test(k)) || keys.find(k=>/battery/i.test(k));
+    const t = tKey ? parseFloat(row[tKey]) : 0;
+    const h = hKey ? parseFloat(row[hKey]) : 0;
+    const b = bKey ? parseFloat(row[bKey]) : 0;
+    const isAnom = row.anomaly ? 1 : 0;
+
+    deviceStatus[device] = {t,h,b,status:isAnom};
+
+    const statusHtml = isAnom ? 
+      '<span class="status-dot dot-red"></span><strong style="color:#ef4444">ANOMALY</strong>' :
+      '<span class="status-dot dot-green"></span>Normal';
+
     const tr = document.createElement('tr');
-    tr.innerHTML = `<td>${d}</td><td>${typeof r.t === 'number' ? r.t.toFixed(2) : r.t}</td><td>${typeof r.h === 'number' ? r.h.toFixed(2) : r.h}</td><td>${typeof r.b === 'number' ? r.b.toFixed(2) : r.b}</td><td>${statusHtml}</td>`;
+    tr.innerHTML = `<td>${device}</td><td>${t.toFixed(2)}</td><td>${h.toFixed(2)}</td><td>${b.toFixed(2)}</td><td>${statusHtml}</td>`;
     tbody.appendChild(tr);
   });
 }
@@ -66,33 +80,34 @@ async function fetchLatest(){
     const j = await res.json();
     if(!j.success){ console.error('No data', j); return; }
     const rows = j.rows;
-    // process each top-device row
+
+    // Update charts & device table
     rows.forEach(row => {
-      const device = row.Device_ID || row.device || ("dev_"+Math.floor(Math.random()*999));
-      // heuristics for keys
       const keys = Object.keys(row);
       const tKey = keys.find(k=>/temp/i.test(k)) || keys.find(k=>/temperature/i.test(k));
       const hKey = keys.find(k=>/hum/i.test(k)) || keys.find(k=>/humidity/i.test(k));
       const bKey = keys.find(k=>/bat/i.test(k)) || keys.find(k=>/battery/i.test(k));
-      const t = tKey ? parseFloat(row[tKey]) : 0;
-      const h = hKey ? parseFloat(row[hKey]) : 0;
-      const b = bKey ? parseFloat(row[bKey]) : 0;
-      const isAnom = row.anomaly ? 1 : 0;
-      updateCharts(t,h,b);
-      updateDeviceTable(device, t, h, b, isAnom);
-      if(isAnom){
-        pushAlert(`${device} flagged as anomaly (score=${row.score !== null ? row.score.toFixed(3) : 'n/a'})`);
+      updateCharts(tKey ? parseFloat(row[tKey]) : 0,
+                   hKey ? parseFloat(row[hKey]) : 0,
+                   bKey ? parseFloat(row[bKey]) : 0);
+    });
+
+    updateDeviceTable(rows);  // pass all rows once
+
+    // Alerts
+    rows.forEach(row => {
+      if(row.anomaly){
+        pushAlert(`${row.Device_ID} flagged as anomaly (score=${row.score.toFixed(3)})`);
         document.getElementById('statusBadge').className='badge red';
         document.getElementById('statusBadge').innerText='ALERT';
-      } else {
-        document.getElementById('statusBadge').className='badge green';
-        document.getElementById('statusBadge').innerText='LIVE';
       }
     });
+
   }catch(e){
     console.error(e);
   }
 }
+
 
 window.addEventListener('load', ()=>{
   createCharts();
