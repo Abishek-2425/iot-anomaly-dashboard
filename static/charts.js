@@ -5,6 +5,10 @@ let labels = [];
 let tempData = [], humData = [], batData = [];
 let deviceStatus = {};
 
+// Active alerts tracking
+let activeAlerts = {};  // key = device, value = alert div
+
+
 function createCharts(){
   const ctxT = document.getElementById('chartTemp').getContext('2d');
   tempChart = new Chart(ctxT, {
@@ -66,14 +70,34 @@ function updateDeviceTable(device, t, h, b, status){
 }
 
 
-function pushAlert(msg){
+function pushAlert(device, msg) {
   const alerts = document.getElementById('alerts');
+
+  // If this device already has an active alert, update timestamp/message instead of adding new
+  if (activeAlerts[device]) {
+    activeAlerts[device].innerText = `[${new Date().toLocaleTimeString()}] ${msg}`;
+    return;
+  }
+
+  // Create new alert div
   const div = document.createElement('div');
-  div.className='alert';
-  div.innerText = `[${new Date().toLocaleTimeString()}] ` + msg;
+  div.className = 'alert';
+  div.innerText = `[${new Date().toLocaleTimeString()}] ${msg}`;
+  
   alerts.prepend(div);
-  while(alerts.children.length>8) alerts.removeChild(alerts.lastChild);
+  activeAlerts[device] = div;
+
+  // Limit max 8 alerts
+  while (alerts.children.length > 8) {
+    const lastChild = alerts.lastChild;
+    // Remove from activeAlerts if present
+    Object.keys(activeAlerts).forEach(d => {
+      if (activeAlerts[d] === lastChild) delete activeAlerts[d];
+    });
+    alerts.removeChild(lastChild);
+  }
 }
+
 
 // Optimized fetchLatest
 async function fetchLatest(){
@@ -99,7 +123,7 @@ async function fetchLatest(){
       // Handle alerts
       const statusBadge = document.getElementById('statusBadge');
       if(isAnom){
-        pushAlert(`${device} flagged as anomaly`);
+        pushAlert(device, `${device} flagged as anomaly (score=${row.score !== null ? row.score.toFixed(3) : 'n/a'})`);
         statusBadge.className='badge red';
         statusBadge.innerText='ALERT';
       } else {
