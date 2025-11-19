@@ -44,17 +44,31 @@ function updateCharts(t, h, b){
 
 // update device table start
 
-// Optimized device table update
 function updateDeviceTable(device, t, h, b, status){
+  // Save current device state
   deviceStatus[device] = {t,h,b,status};
+
   const tbody = document.querySelector('#deviceTable tbody');
   tbody.innerHTML = '';
 
-  // Only show top 5 devices by the order in deviceStatus
-  const topDevices = Object.keys(deviceStatus).slice(0, 5);
+  // Convert deviceStatus to array
+  let devicesArray = Object.entries(deviceStatus);
 
-  topDevices.forEach(d => {
-    const r = deviceStatus[d];
+  // Shuffle array slightly to rotate non-anomalies
+  const anomalies = devicesArray.filter(([_, r]) => r.status);
+  let normals = devicesArray.filter(([_, r]) => !r.status);
+
+  // Shuffle normals
+  for (let i = normals.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [normals[i], normals[j]] = [normals[j], normals[i]];
+  }
+
+  // Merge anomalies on top
+  const sortedDevices = [...anomalies, ...normals].slice(0, 5);
+
+  // Populate table
+  sortedDevices.forEach(([d, r]) => {
     const statusHtml = r.status 
       ? ('<span class="status-dot dot-red"></span><strong style="color:#ef4444">ANOMALY</strong>') 
       : ('<span class="status-dot dot-green"></span>Normal');
