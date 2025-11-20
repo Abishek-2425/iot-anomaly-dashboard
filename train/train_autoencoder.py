@@ -1,21 +1,23 @@
 # train_autoencoder.py
 """
-Train an Autoencoder on synthetic_iot_dataset.csv.
+Train a simple Autoencoder on synthetic_iot_dataset.csv.
 Prefers rows where Anomaly==0 (if column exists).
-Saves autoencoder_model.h5 to models/ folder.
+Saves autoencoder_model.keras to models/ directory.
 """
 from pathlib import Path
 import pandas as pd
 import numpy as np
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import Dense
-from tensorflow.keras.models import load_model
+from tensorflow.keras.optimizers import Adam
 from sklearn.preprocessing import StandardScaler
 
+# ==== CONFIG ====
 BASE = Path(__file__).parent
-DATA_FILE = BASE / "synthetic_iot_dataset.csv"
-MODEL_FILE = BASE / "models/autoencoder_model.h5"
+DATA_FILE = BASE.parent / "synthetic_iot_dataset.csv"
+MODEL_FILE = BASE.parent / "models/autoencoder_model.keras"
 
+# ==== LOAD DATA ====
 if not DATA_FILE.exists():
     print("Dataset not found at", DATA_FILE)
     raise SystemExit(1)
@@ -28,22 +30,33 @@ if numeric.shape[1] == 0:
 
 if "Anomaly" in df.columns:
     normal = df[df["Anomaly"] == 0].select_dtypes(include=[int, float])
-    X = normal.values if normal.shape[0] >= 10 else numeric.values
+    if normal.shape[0] >= 10:
+        X = normal.values
+        print(f"Training on {normal.shape[0]} normal rows (Anomaly==0).")
+    else:
+        X = numeric.values
+        print("Not enough normal-labeled rows; training on all numeric rows.")
 else:
     X = numeric.values
+    print("No Anomaly column - training on all numeric rows.")
 
+# ==== SCALE DATA ====
 scaler = StandardScaler()
 X_scaled = scaler.fit_transform(X)
 
-# Simple Autoencoder
+# ==== BUILD AUTOENCODER ====
 input_dim = X_scaled.shape[1]
-autoencoder = Sequential([
+model = Sequential([
     Dense(16, activation='relu', input_shape=(input_dim,)),
     Dense(8, activation='relu'),
     Dense(16, activation='relu'),
     Dense(input_dim, activation='linear')
 ])
-autoencoder.compile(optimizer='adam', loss='mse')
-autoencoder.fit(X_scaled, X_scaled, epochs=50, batch_size=32, validation_split=0.1, verbose=0)
-autoencoder.save(MODEL_FILE)
+model.compile(optimizer=Adam(learning_rate=0.001), loss='mse')
+
+# ==== TRAIN ====
+model.fit(X_scaled, X_scaled, epochs=50, batch_size=32, verbose=1)
+
+# ==== SAVE MODEL ====
+model.save(MODEL_FILE)
 print("Trained Autoencoder saved to", MODEL_FILE)
