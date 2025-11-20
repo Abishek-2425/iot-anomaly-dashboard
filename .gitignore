@@ -95,3 +95,9 @@ bower_components/
 
 # .pkl models
 *.pkl
+
+# .h5 models
+*.h5
+
+# .keras models
+*.keras
