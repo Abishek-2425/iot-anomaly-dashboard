@@ -68,7 +68,7 @@ def print_comparison_table(results, sort_by="f1"):
                 if r["precision"] == best_prec else f"{r['precision']:.4f}")
 
         rec = (Fore.GREEN + f"{r['recall']:.4f}" + Style.RESET_ALL
-               if r["recall'] == best_rec else f"{r['recall']:.4f}")
+               if r["recall"] == best_rec else f"{r['recall']:.4f}")
 
         f1 = (Fore.GREEN + f"{r['f1']:.4f}" + Style.RESET_ALL
               if r["f1"] == best_f1 else f"{r['f1']:.4f}")
