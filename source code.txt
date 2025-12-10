@@ -1,0 +1,927 @@
+File Structure :
+
+├── .gitignore
+├── README.txt
+├── app.py
+├── complete source code.txt
+├── evaluate_all.py
+├── static
+    ├── charts.js
+    └── style.css
+├── synthetic_iot_dataset.csv
+├── templates
+    └── dashboard.html
+└── train
+    ├── train_autoencoder.py
+    ├── train_if.py
+    └── train_ocsvm.py
+
+
+/app.py:
+
+# app.py
+
+from flask import Flask, render_template, request, jsonify, send_from_directory
+from pathlib import Path
+import pandas as pd
+import numpy as np
+import joblib
+
+app = Flask(__name__)
+BASE = Path(__file__).parent
+
+# Files
+DATA_FILE = BASE / "synthetic_iot_dataset.csv"
+MODEL_FILE = BASE / "models/base_if_model.pkl"
+
+# Global runtime state
+df_source = pd.DataFrame()
+model = None
+top_devices = []
+device_state = {}     # live simulated state (temp/hum/bat)
+TOP_K = 5
+
+
+# ----------------------------------------------------
+# Helper: Identify sensor feature names in dataset
+# ----------------------------------------------------
+def detect_features(df):
+    numeric = df.select_dtypes(include=[np.number]).columns.tolist()
+
+    feature_map = {
+        "temp": None,
+        "hum": None,
+        "bat": None
+    }
+
+    for candidates, key in [
+        (["Temperature", "Temp", "temperature", "latency_ms"], "temp"),
+        (["Humidity", "Hum", "humidity", "jitter_ms"], "hum"),
+        (["Battery_Level", "Battery", "battery", "throughput_kbps"], "bat")
+    ]:
+        for c in candidates:
+            if c in numeric:
+                feature_map[key] = c
+                break
+
+    # fallback: just use numeric columns in order
+    if feature_map["temp"] is None and len(numeric) > 0:
+        feature_map["temp"] = numeric[0]
+    if feature_map["hum"] is None and len(numeric) > 1:
+        feature_map["hum"] = numeric[1]
+    if feature_map["bat"] is None and len(numeric) > 2:
+        feature_map["bat"] = numeric[2]
+
+    return feature_map
+
+
+# ----------------------------------------------------
+# Load dataset & initialize device simulation
+# ----------------------------------------------------
+def load_dataset():
+    global df_source, top_devices, device_state
+
+    if not DATA_FILE.exists():
+        df_source = pd.DataFrame()
+        top_devices = []
+        device_state = {}
+        return
+
+    df_source = pd.read_csv(DATA_FILE)
+
+    # Ensure Device_ID exists
+    if "Device_ID" not in df_source.columns:
+        df_source.insert(0, "Device_ID", [f"Device_{i%50+1}" for i in range(len(df_source))])
+
+    # Pick top devices based on frequency
+    counts = df_source["Device_ID"].value_counts()
+    top_devices = list(counts.index[:TOP_K])
+
+    features = detect_features(df_source)
+
+    # Base values = mean per device for realism
+    device_state = {}
+    for dev in top_devices:
+        subset = df_source[df_source["Device_ID"] == dev]
+        means = subset.mean(numeric_only=True) if not subset.empty else {}
+
+        device_state[dev] = {
+            "temp_key": features["temp"],
+            "hum_key": features["hum"],
+            "bat_key": features["bat"],
+            "temp": float(means.get(features["temp"], 25.0)),
+            "hum": float(means.get(features["hum"], 45.0)),
+            "bat": float(means.get(features["bat"], 80.0))
+        }
+
+
+load_dataset()
+
+
+# ----------------------------------------------------
+# Try loading model
+# ----------------------------------------------------
+if MODEL_FILE.exists():
+    try:
+        model = joblib.load(MODEL_FILE)
+        print("✅ Loaded base_if_model.pkl")
+    except Exception:
+        print("⚠️ Failed to load model, will rebuild on upload.")
+        model = None
+
+
+# ----------------------------------------------------
+# Simulated Live Stream
+# ----------------------------------------------------
+np.random.seed(7)
+
+def generate_live_data():
+    """Simulate live sensor readings for each top device with realistic drift and occasional anomalies."""
+    rows = []
+    for dev, st in device_state.items():
+
+        # Historical means for controlled drift
+        mean_temp = st.get("mean_temp", st["temp"])
+        mean_hum = st.get("mean_hum", st["hum"])
+        mean_bat = st.get("mean_bat", st["bat"])
+
+        # Save historical mean once
+        if "mean_temp" not in st:
+            st["mean_temp"] = mean_temp
+            st["mean_hum"] = mean_hum
+            st["mean_bat"] = mean_bat
+
+        # Apply small normal drift
+        st["temp"] += np.random.normal(0, 0.5)
+        st["hum"]  += np.random.normal(0, 1.0)
+        st["bat"]  += np.random.normal(0, 0.3)
+
+        # Occasional anomaly spike (rare)
+        if np.random.rand() < 0.05:  # 5% chance
+            st["temp"] += np.random.uniform(5, 15)
+            st["hum"]  += np.random.uniform(10, 30)
+            st["bat"]  -= np.random.uniform(5, 15)
+
+        # Clamp values to realistic bounds
+        st["temp"] = np.clip(st["temp"], mean_temp - 5, mean_temp + 5)
+        st["hum"]  = np.clip(st["hum"], mean_hum - 10, mean_hum + 10)
+        st["bat"]  = np.clip(st["bat"], 0, 100)
+
+        # Build row
+        row = {
+            "Device_ID": dev,
+            st["temp_key"]: round(st["temp"], 2),
+            st["hum_key"]: round(st["hum"], 2),
+            st["bat_key"]: round(st["bat"], 2)
+        }
+
+        rows.append(row)
+
+    return rows
+
+
+
+
+
+# ----------------------------------------------------
+# Flask Routes
+# ----------------------------------------------------
+@app.route("/")
+def index():
+    return render_template("dashboard.html")
+
+
+@app.route("/upload", methods=["POST"])
+def upload():
+    global model
+    file = request.files.get("file")
+
+    if not file:
+        return jsonify({"success": False, "error": "No file provided"}), 400
+
+    # Save and re-load dataset
+    save_path = BASE / "uploaded.csv"
+    file.save(save_path)
+
+    try:
+        df = pd.read_csv(save_path)
+    except Exception:
+        return jsonify({"success": False, "error": "Invalid CSV file"}), 400
+
+    df.to_csv(DATA_FILE, index=False)
+    load_dataset()
+
+    numeric = df.select_dtypes(include=[np.number]).drop(columns=["Anomaly"], errors="ignore")
+    if numeric.empty:
+        return jsonify({"success": False, "error": "Dataset contains no numeric columns"}), 400
+
+    # Prefer known normal rows
+    if "Anomaly" in df.columns and (df["Anomaly"] == 0).sum() >= 10:
+        train_data = df[df["Anomaly"] == 0].select_dtypes(include=[np.number]).drop(columns=["Anomaly"], errors="ignore").values
+    else:
+        train_data = numeric.values
+
+    from sklearn.ensemble import IsolationForest
+    clf = IsolationForest(n_estimators=200, contamination=0.05, random_state=42)
+    clf.fit(train_data)
+
+    joblib.dump(clf, MODEL_FILE)
+    model = clf
+
+    return jsonify({"success": True, "message": "Dataset uploaded and model trained successfully."})
+
+
+@app.route("/data/latest")
+def live_data():
+    if df_source.empty or not top_devices:
+        return jsonify({"success": False, "error": "No dataset loaded."}), 400
+
+    rows = generate_live_data()
+    df_live = pd.DataFrame(rows)
+
+    numeric = df_live.select_dtypes(include=[np.number]).values
+    preds = model.predict(numeric) if model is not None else [1] * len(df_live)
+    scores = model.decision_function(numeric) if model is not None else [0] * len(df_live)
+
+    output = []
+    for r, p, s in zip(rows, preds, scores):
+        r["anomaly"] = 1 if p == -1 else 0
+        r["score"] = float(s)  # include score for alerts
+        output.append(r)
+
+    return jsonify({"success": True, "rows": output})
+
+
+@app.route("/static/<path:filename>")
+def static_files(filename):
+    return send_from_directory(BASE / "static", filename)
+
+
+# ----------------------------------------------------
+# Run
+# ----------------------------------------------------
+if __name__ == "__main__":
+    print("🚀 Starting Dashboard at http://localhost:5000")
+    app.run(host="0.0.0.0", debug=True, port=5000)
+
+
+
+
+
+
+
+
+
+/evaluate_all.py :
+
+# evaluate_all.py
+"""
+Evaluate all three anomaly detection models using the exact features used for training:
+- Isolation Forest
+- One-Class SVM
+- Autoencoder
+
+Uses synthetic_iot_dataset.csv at project root and models in models/.
+Generates metrics, classification reports, and confusion matrices.
+"""
+from pathlib import Path
+import pandas as pd
+import numpy as np
+import joblib
+import matplotlib.pyplot as plt
+from sklearn.metrics import confusion_matrix, classification_report, accuracy_score, precision_score, recall_score, f1_score
+from sklearn.preprocessing import StandardScaler
+from tensorflow.keras.models import load_model
+
+BASE = Path(__file__).parent
+DATA_FILE = BASE / "synthetic_iot_dataset.csv"
+OUTPUT_FILE = BASE / "output/confusion_matrices_all.png"
+(BASE / "output").mkdir(exist_ok=True)
+
+# ==== LOAD DATA ====
+if not DATA_FILE.exists():
+    print("Dataset not found at", DATA_FILE)
+    raise SystemExit(1)
+
+df = pd.read_csv(DATA_FILE)
+if "Anomaly" not in df.columns:
+    print("No 'Anomaly' column found. Evaluation skipped.")
+    raise SystemExit(1)
+
+y_true = df["Anomaly"].values
+
+# ==== FIXED FEATURES ====
+feature_cols = ["Temperature", "Humidity", "Battery_Level","Anomaly"]
+X_model = df[feature_cols].values
+
+# ==== MODELS CONFIG ====
+models_info = [
+    {"name": "Isolation Forest", "file": BASE / "models/if_model.pkl", "type": "if"},
+    {"name": "One-Class SVM", "file": BASE / "models/ocsvm_model.pkl", "type": "ocsvm"},
+    {"name": "Autoencoder", "file": BASE / "models/autoencoder_model.keras", "type": "ae"}
+]
+
+scaler = StandardScaler()  # Only for Autoencoder
+
+# ==== PLOT SETUP ====
+fig, axes = plt.subplots(1, 3, figsize=(18, 5))
+
+for idx, info in enumerate(models_info):
+    print(f"\nEvaluating {info['name']}...")
+
+    # Load model
+    if info["type"] == "ae":
+        model = load_model(info["file"])
+        X_scaled = scaler.fit_transform(X_model)
+        reconstructions = model.predict(X_scaled)
+        mse = np.mean(np.power(X_scaled - reconstructions, 2), axis=1)
+        threshold = np.percentile(mse, 95)  # 95th percentile threshold
+        y_pred = (mse > threshold).astype(int)
+    else:
+        model = joblib.load(info["file"])
+        y_pred_raw = model.predict(X_model)
+        y_pred = np.where(y_pred_raw == -1, 1, 0)  # anomaly = 1, normal = 0
+
+    # ==== METRICS ====
+    acc = accuracy_score(y_true, y_pred)
+    prec = precision_score(y_true, y_pred, zero_division=0)
+    rec = recall_score(y_true, y_pred, zero_division=0)
+    f1 = f1_score(y_true, y_pred, zero_division=0)
+
+    print(f"Accuracy:  {acc:.4f}")
+    print(f"Precision: {prec:.4f}")
+    print(f"Recall:    {rec:.4f}")
+    print(f"F1 Score:  {f1:.4f}")
+    print(classification_report(y_true, y_pred, target_names=["Normal", "Anomaly"]))
+
+    # ==== CONFUSION MATRIX ====
+    cm = confusion_matrix(y_true, y_pred)
+    ax = axes[idx]
+    im = ax.imshow(cm, cmap='Blues')
+    ax.set_title(f"{info['name']} Confusion Matrix")
+    ax.set_xlabel("Predicted")
+    ax.set_ylabel("Actual")
+    ax.set_xticks([0, 1])
+    ax.set_yticks([0, 1])
+    ax.set_xticklabels(["Normal", "Anomaly"])
+    ax.set_yticklabels(["Normal", "Anomaly"])
+    for i in range(2):
+        for j in range(2):
+            ax.text(j, i, cm[i, j], ha='center', va='center', color='red')
+
+plt.tight_layout()
+plt.savefig(OUTPUT_FILE)
+plt.show()
+print(f"\nAll confusion matrices saved to {OUTPUT_FILE}")
+
+
+
+
+
+/static/charts.js :
+
+// static/charts.js - Clean Chart.js logic for real-time simulation (Top 5 devices)
+
+let tempChart, humChart, batChart;
+let labels = [];
+let tempData = [], humData = [], batData = [];
+let deviceStatus = {};
+
+// Active alerts tracking
+let activeAlerts = {};  // key = device, value = alert div
+
+
+function createCharts(){
+  const ctxT = document.getElementById('chartTemp').getContext('2d');
+  tempChart = new Chart(ctxT, {
+    type: 'line',
+    data: { labels: labels, datasets: [{ label: 'Temperature', data: tempData, fill:true, borderWidth:2, pointRadius:0, backgroundColor:'rgba(31,122,219,0.08)', borderColor:'#1f7adb' }]},
+    options: { responsive:true, maintainAspectRatio:false, plugins:{ legend:{display:false}}, scales:{ x:{ display:false }, y:{ beginAtZero:false } } }
+  });
+
+  const ctxH = document.getElementById('chartHum').getContext('2d');
+  humChart = new Chart(ctxH, {
+    type: 'line',
+    data: { labels: labels, datasets: [{ label: 'Humidity', data: humData, fill:true, borderWidth:2, pointRadius:0, backgroundColor:'rgba(155,155,255,0.06)', borderColor:'#6b72ff' }]},
+    options: { responsive:true, maintainAspectRatio:false, plugins:{ legend:{display:false}}, scales:{ x:{ display:false } } }
+  });
+
+  const ctxB = document.getElementById('chartBat').getContext('2d');
+  batChart = new Chart(ctxB, {
+    type: 'line',
+    data: { labels: labels, datasets: [{ label: 'Battery', data: batData, fill:true, borderWidth:2, pointRadius:0, backgroundColor:'rgba(22,163,74,0.06)', borderColor:'#16a34a' }]},
+    options: { responsive:true, maintainAspectRatio:false, plugins:{ legend:{display:false}}, scales:{ x:{ display:false }, y:{ beginAtZero:true, max:110 } } }
+  });
+}
+
+function updateCharts(t, h, b){
+  const timeLabel = new Date().toLocaleTimeString();
+  labels.push(timeLabel);
+  if(labels.length>40){
+    labels.shift(); tempData.shift(); humData.shift(); batData.shift();
+  }
+  tempData.push(t); humData.push(h); batData.push(b);
+  tempChart.update(); humChart.update(); batChart.update();
+}
+
+// update device table start
+
+function updateDeviceTable(device, t, h, b, status){
+  // Save current device state
+  deviceStatus[device] = {t,h,b,status};
+
+  const tbody = document.querySelector('#deviceTable tbody');
+  tbody.innerHTML = '';
+
+  // Convert deviceStatus to array
+  let devicesArray = Object.entries(deviceStatus);
+
+  // Shuffle array slightly to rotate non-anomalies
+  const anomalies = devicesArray.filter(([_, r]) => r.status);
+  let normals = devicesArray.filter(([_, r]) => !r.status);
+
+  // Shuffle normals
+  for (let i = normals.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [normals[i], normals[j]] = [normals[j], normals[i]];
+  }
+
+  // Merge anomalies on top
+  const sortedDevices = [...anomalies, ...normals].slice(0, 5);
+
+  // Populate table
+  sortedDevices.forEach(([d, r]) => {
+    const statusHtml = r.status 
+      ? ('<span class="status-dot dot-red"></span><strong style="color:#ef4444">ANOMALY</strong>') 
+      : ('<span class="status-dot dot-green"></span>Normal');
+
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td>${d}</td>
+                    <td>${typeof r.t === 'number' ? r.t.toFixed(2) : r.t}</td>
+                    <td>${typeof r.h === 'number' ? r.h.toFixed(2) : r.h}</td>
+                    <td>${typeof r.b === 'number' ? r.b.toFixed(2) : r.b}</td>
+                    <td>${statusHtml}</td>`;
+    tbody.appendChild(tr);
+  });
+}
+
+
+function pushAlert(device, msg) {
+  const alerts = document.getElementById('alerts');
+
+  // If this device already has an active alert, update timestamp/message instead of adding new
+  if (activeAlerts[device]) {
+    activeAlerts[device].innerText = `[${new Date().toLocaleTimeString()}] ${msg}`;
+    return;
+  }
+
+  // Create new alert div
+  const div = document.createElement('div');
+  div.className = 'alert';
+  div.innerText = `[${new Date().toLocaleTimeString()}] ${msg}`;
+  
+  alerts.prepend(div);
+  activeAlerts[device] = div;
+
+  // Limit max 8 alerts
+  while (alerts.children.length > 8) {
+    const lastChild = alerts.lastChild;
+    // Remove from activeAlerts if present
+    Object.keys(activeAlerts).forEach(d => {
+      if (activeAlerts[d] === lastChild) delete activeAlerts[d];
+    });
+    alerts.removeChild(lastChild);
+  }
+}
+
+
+// Optimized fetchLatest
+async function fetchLatest(){
+  try {
+    const res = await fetch('/data/latest');
+    const j = await res.json();
+    if(!j.success){ console.error('No data', j); return; }
+
+    j.rows.forEach(row => {
+      const device = row.Device_ID || row.device || ("dev_"+Math.floor(Math.random()*999));
+      const keys = Object.keys(row);
+      const tKey = keys.find(k=>/temp/i.test(k)) || keys.find(k=>/temperature/i.test(k));
+      const hKey = keys.find(k=>/hum/i.test(k)) || keys.find(k=>/humidity/i.test(k));
+      const bKey = keys.find(k=>/bat/i.test(k)) || keys.find(k=>/battery/i.test(k));
+      const t = tKey ? parseFloat(row[tKey]) : 0;
+      const h = hKey ? parseFloat(row[hKey]) : 0;
+      const b = bKey ? parseFloat(row[bKey]) : 0;
+      const isAnom = row.anomaly ? 1 : 0;
+
+      updateCharts(t,h,b);
+      updateDeviceTable(device, t, h, b, isAnom);
+
+      // Handle alerts
+      const statusBadge = document.getElementById('statusBadge');
+      if(isAnom){
+        pushAlert(device, `${device} flagged as anomaly (score=${row.score !== null ? row.score.toFixed(3) : 'n/a'})`);
+        statusBadge.className='badge red';
+        statusBadge.innerText='ALERT';
+      } else {
+        statusBadge.className='badge green';
+        statusBadge.innerText='LIVE';
+      }
+    });
+  } catch(e){
+    console.error(e);
+  }
+}
+
+// fatch latest end
+
+window.addEventListener('load', ()=>{
+  createCharts();
+  // warm-up fetches
+  for(let i=0;i<4;i++) setTimeout(fetchLatest, i*200);
+  // poll regularly
+  setInterval(fetchLatest, 1000);
+});
+
+
+
+
+/static/style.css :
+
+/* static/style.css - Clean light professional theme */
+:root{
+  --bg: #f6f8fb;
+  --card: #ffffff;
+  --muted: #6b7280;
+  --accent: #1f7adb;
+  --success: #16a34a;
+  --danger: #ef4444;
+  --soft: #e6eefc;
+  font-family: Inter, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+}
+*{box-sizing:border-box}
+body{
+  margin:0;
+  background:var(--bg);
+  color:#0f172a;
+  -webkit-font-smoothing:antialiased;
+  font-size:14px;
+}
+.topbar{
+  display:flex;
+  justify-content:space-between;
+  align-items:center;
+  padding:18px 28px;
+  border-bottom:1px solid rgba(15,23,42,0.06);
+  background: linear-gradient(180deg, #ffffff, #fbfdff);
+}
+.title h1{ margin:0; font-size:18px; color:var(--accent); }
+.title .subtitle{ margin:4px 0 0 0; color:var(--muted); font-size:12px; }
+
+.actions{ display:flex; align-items:center; gap:10px; }
+input[type=file]{ padding:6px; }
+button{ background:var(--accent); color:white; border:none; padding:8px 12px; border-radius:8px; cursor:pointer; font-weight:600; }
+button:hover{ opacity:0.95; }
+
+.badge{ padding:6px 10px; border-radius:8px; font-weight:600; font-size:13px; }
+.badge.green{ background:linear-gradient(90deg,#e8f3ff, #e6f2ff); color:var(--accent); border:1px solid rgba(31,122,219,0.12); }
+.badge.yellow{ background: #fff7e6; color:#b45309; border:1px solid rgba(212,170,0,0.08);}
+.badge.red{ background:#fff1f2; color:var(--danger); border:1px solid rgba(239,68,68,0.08); }
+
+.main{ display:flex; gap:18px; padding:20px; }
+.left{ flex:2; display:flex; flex-direction:column; gap:18px; }
+.right{ flex:1; display:flex; flex-direction:column; gap:18px; }
+
+.card{ background:var(--card); border-radius:10px; padding:14px; box-shadow:0 6px 18px rgba(15,23,42,0.06); border:1px solid rgba(15,23,42,0.03); }
+.card h3{ margin:0 0 8px 0; font-size:15px; color:#0b1220; }
+
+.small-row{ display:flex; gap:12px; }
+.mini-card{ flex:1; padding:10px; }
+
+canvas{ width:100% !important; height:220px !important; }
+
+table{ width:100%; border-collapse:collapse; font-size:13px; }
+table thead th{ text-align:left; padding:8px; color:var(--muted); font-weight:600; font-size:12px; border-bottom:1px solid rgba(15,23,42,0.04);}
+table tbody td{ padding:10px 8px; border-bottom:1px solid rgba(15,23,42,0.03); }
+
+.status-dot{ width:10px; height:10px; border-radius:50%; display:inline-block; margin-right:8px; vertical-align:middle; }
+.dot-green{ background:var(--success); }
+.dot-red{ background:var(--danger); }
+
+/* Recent Alerts panel – match left charts height */
+.right > .card:last-child {
+  flex: 1;                 /* fills remaining height in right column */
+  display: flex;
+  flex-direction: column;
+}
+
+#alerts {
+  flex: 1;                 /* fill the card vertically */
+  overflow-y: auto;        /* scroll if content exceeds height */
+  font-size: 13px;
+  color: #0b1220;
+  padding: 10px;
+}
+.alert{ padding:10px; border-radius:8px; margin-bottom:8px; background:#fff8f8; border-left:4px solid rgba(239,68,68,0.08); }
+
+
+
+
+
+
+
+
+
+/templates/dashboard.html :
+
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <title>IoT Anomaly Dashboard</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+
+    <!-- Styles -->
+    <link rel="stylesheet" href="/static/style.css">
+
+    <!-- Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  </head>
+
+  <body>
+    <!-- Top Navigation / Header -->
+    <header class="topbar">
+      <div class="title">
+        <h1>IoT Monitoring — Anomaly Detection</h1>
+        <p class="subtitle">Real-time feed simulated from uploaded dataset</p>
+      </div>
+
+      <div class="actions">
+        <label for="fileInput" class="file-label">Dataset:</label>
+        <input id="fileInput" type="file" accept=".csv">
+        <button id="uploadBtn">Upload & Train</button>
+
+        <span id="statusBadge" class="badge green">LIVE</span>
+      </div>
+    </header>
+
+    <!-- Main Content -->
+    <main class="main">
+
+      <!-- Left Column: Charts -->
+      <section class="left">
+        <div class="card">
+          <h3>Temperature</h3>
+          <canvas id="chartTemp"></canvas>
+        </div>
+
+        <div class="card small-row">
+          <div class="mini-card">
+            <h4>Humidity</h4>
+            <canvas id="chartHum"></canvas>
+          </div>
+
+          <div class="mini-card">
+            <h4>Battery</h4>
+            <canvas id="chartBat"></canvas>
+          </div>
+        </div>
+      </section>
+
+      <!-- Right Column: Tables & Alerts -->
+      <aside class="right">
+
+        <div class="card">
+          <h3>Top 5 Devices (Live)</h3>
+          <table id="deviceTable">
+            <thead>
+              <tr>
+                <th>Device</th>
+                <th>Temperature</th>
+                <th>Humidity</th>
+                <th>Battery</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+
+        <div class="card">
+          <h3>Recent Alerts</h3>
+          <div id="alerts"></div>
+        </div>
+
+      </aside>
+    </main>
+
+    <!-- Custom JS for charts + data fetch -->
+    <script src="/static/charts.js"></script>
+
+    <!-- Upload & training logic -->
+    <script>
+      document.getElementById('uploadBtn').addEventListener('click', async () => {
+        const fileInput = document.getElementById('fileInput');
+        const badge = document.getElementById('statusBadge');
+
+        if (!fileInput.files.length) {
+          alert('Select a CSV file first.');
+          return;
+        }
+
+        const formData = new FormData();
+        formData.append('file', fileInput.files[0]);
+
+        badge.innerText = 'TRAINING...';
+        badge.className = 'badge yellow';
+
+        try {
+          const response = await fetch('/upload', { method: 'POST', body: formData });
+          const json = await response.json();
+
+          if (json.success) {
+            alert('Upload complete. Model retrained.');
+            badge.innerText = 'LIVE';
+            badge.className = 'badge green';
+          } else {
+            throw new Error(json.error || 'Training failed');
+          }
+
+        } catch (err) {
+          console.error(err);
+          alert('Error during upload or training: ' + err.message);
+          badge.innerText = 'ERROR';
+          badge.className = 'badge red';
+        }
+      });
+    </script>
+
+  </body>
+</html>
+
+
+
+
+/train/train_autoencoder.py :
+
+# train_autoencoder.py
+"""
+Train a simple Autoencoder on synthetic_iot_dataset.csv.
+Prefers rows where Anomaly==0 (if column exists).
+Saves autoencoder_model.keras to models/ directory.
+"""
+from pathlib import Path
+import pandas as pd
+import numpy as np
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import Dense
+from tensorflow.keras.optimizers import Adam
+from sklearn.preprocessing import StandardScaler
+
+# ==== CONFIG ====
+BASE = Path(__file__).parent
+DATA_FILE = BASE.parent / "synthetic_iot_dataset.csv"
+MODEL_FILE = BASE.parent / "models/autoencoder_model.keras"
+
+# ==== LOAD DATA ====
+if not DATA_FILE.exists():
+    print("Dataset not found at", DATA_FILE)
+    raise SystemExit(1)
+
+df = pd.read_csv(DATA_FILE)
+numeric = df.select_dtypes(include=[int, float]).drop(columns=["Anomaly"], errors="ignore")
+if numeric.shape[1] == 0:
+    print("No numeric columns found in dataset.")
+    raise SystemExit(1)
+
+if "Anomaly" in df.columns:
+    normal = df[df["Anomaly"] == 0].select_dtypes(include=[int, float])
+    if normal.shape[0] >= 10:
+        X = normal.values
+        print(f"Training on {normal.shape[0]} normal rows (Anomaly==0).")
+    else:
+        X = numeric.values
+        print("Not enough normal-labeled rows; training on all numeric rows.")
+else:
+    X = numeric.values
+    print("No Anomaly column - training on all numeric rows.")
+
+# ==== SCALE DATA ====
+scaler = StandardScaler()
+X_scaled = scaler.fit_transform(X)
+
+# ==== BUILD AUTOENCODER ====
+input_dim = X_scaled.shape[1]
+model = Sequential([
+    Dense(16, activation='relu', input_shape=(input_dim,)),
+    Dense(8, activation='relu'),
+    Dense(16, activation='relu'),
+    Dense(input_dim, activation='linear')
+])
+model.compile(optimizer=Adam(learning_rate=0.001), loss='mse')
+
+# ==== TRAIN ====
+model.fit(X_scaled, X_scaled, epochs=50, batch_size=32, verbose=1)
+
+# ==== SAVE MODEL ====
+model.save(MODEL_FILE)
+print("Trained Autoencoder saved to", MODEL_FILE)
+
+
+
+
+
+
+/train/train_if.py :
+
+# train_if.py
+"""
+Train IsolationForest on synthetic_iot_dataset.csv at project root.
+Saves trained model to models/if_model.pkl.
+"""
+from pathlib import Path
+import pandas as pd
+import joblib
+from sklearn.ensemble import IsolationForest
+
+BASE = Path(__file__).parent.parent  # project root
+DATA_FILE = BASE.parent / "synthetic_iot_dataset.csv"
+MODEL_FILE = BASE.parent / "models/if_model.pkl"
+
+if not DATA_FILE.exists():
+    print("Dataset not found at", DATA_FILE)
+    raise SystemExit(1)
+
+df = pd.read_csv(DATA_FILE)
+numeric = df.select_dtypes(include=[int, float]).drop(columns=["Anomaly"], errors="ignore")
+if numeric.shape[1] == 0:
+    print("No numeric columns found.")
+    raise SystemExit(1)
+
+if "Anomaly" in df.columns:
+    normal = df[df["Anomaly"] == 0].select_dtypes(include=[int, float])
+    X = normal.values if normal.shape[0] >= 10 else numeric.values
+else:
+    X = numeric.values
+
+clf = IsolationForest(n_estimators=200, contamination=0.05, random_state=42)
+clf.fit(X)
+joblib.dump(clf, MODEL_FILE)
+print("Trained IsolationForest saved to", MODEL_FILE)
+
+
+
+
+
+
+
+/train/train_ocsvm.py :
+
+
+# train_ocsvm.py
+"""
+Train One-Class SVM on synthetic_iot_dataset.csv.
+Prefers rows where Anomaly==0 (if column exists).
+Saves ocsvm_model.pkl to models/ directory.
+"""
+from pathlib import Path
+import pandas as pd
+import joblib
+from sklearn.svm import OneClassSVM
+
+BASE = Path(__file__).parent
+DATA_FILE = BASE.parent / "synthetic_iot_dataset.csv"
+MODEL_FILE = BASE.parent / "models/ocsvm_model.pkl"
+
+if not DATA_FILE.exists():
+    print("Dataset not found at", DATA_FILE)
+    raise SystemExit(1)
+
+df = pd.read_csv(DATA_FILE)
+numeric = df.select_dtypes(include=[int, float]).drop(columns=["Anomaly"], errors="ignore")
+if numeric.shape[1] == 0:
+    print("No numeric columns found in dataset.")
+    raise SystemExit(1)
+
+if "Anomaly" in df.columns:
+    normal = df[df["Anomaly"] == 0].select_dtypes(include=[int, float])
+    if normal.shape[0] >= 10:
+        X = normal.values
+        print(f"Training on {normal.shape[0]} normal rows (Anomaly==0).")
+    else:
+        X = numeric.values
+        print("Not enough normal-labeled rows; training on all numeric rows.")
+else:
+    X = numeric.values
+    print("No Anomaly column - training on all numeric rows.")
+
+clf = OneClassSVM(kernel='rbf', gamma='auto', nu=0.05)
+clf.fit(X)
+joblib.dump(clf, MODEL_FILE)
+print("Trained One-Class SVM saved to", MODEL_FILE)
+
+
+
+
+
+

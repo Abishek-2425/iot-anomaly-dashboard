@@ -36,12 +36,20 @@ OUTPUT_FILE = BASE / "output/confusion_matrices_all.png"
 # ============================================================
 #      CLEAN COMPARISON TABLE FORMATTER
 # ============================================================
-def print_comparison_table(results):
-    """Prints a clean single comparison table of all models."""
-    line = "━" * 72
+def print_comparison_table(results, sort_by="f1"):
+    """Prints a single comparison table with ranking + color-highlighted best metrics."""
+    # Find best values for highlighting
+    best_acc = max(r["accuracy"] for r in results)
+    best_prec = max(r["precision"] for r in results)
+    best_rec = max(r["recall"] for r in results)
+    best_f1 = max(r["f1"] for r in results)
 
+    # Sort models by selected metric
+    results_sorted = sorted(results, key=lambda r: r[sort_by], reverse=True)
+
+    line = "━" * 72
     print("\n" + Fore.MAGENTA + line + Style.RESET_ALL)
-    print(Fore.CYAN + "MODEL COMPARISON (IF • OCSVM • AUTOENCODER)".center(72) + Style.RESET_ALL)
+    print(Fore.CYAN + f"MODEL COMPARISON — SORTED BY {sort_by.upper()}".center(72) + Style.RESET_ALL)
     print(Fore.MAGENTA + line + Style.RESET_ALL)
 
     header = (
@@ -51,13 +59,23 @@ def print_comparison_table(results):
     print(Fore.YELLOW + header + Style.RESET_ALL)
     print("-" * 72)
 
-    for r in results:
+    for r in results_sorted:
+
+        acc = (Fore.GREEN + f"{r['accuracy']:.4f}" + Style.RESET_ALL
+               if r["accuracy"] == best_acc else f"{r['accuracy']:.4f}")
+
+        prec = (Fore.GREEN + f"{r['precision']:.4f}" + Style.RESET_ALL
+                if r["precision"] == best_prec else f"{r['precision']:.4f}")
+
+        rec = (Fore.GREEN + f"{r['recall']:.4f}" + Style.RESET_ALL
+               if r["recall'] == best_rec else f"{r['recall']:.4f}")
+
+        f1 = (Fore.GREEN + f"{r['f1']:.4f}" + Style.RESET_ALL
+              if r["f1"] == best_f1 else f"{r['f1']:.4f}")
+
         print(
             f"{r['name']:<20} "
-            f"{r['accuracy']:<10.4f} "
-            f"{r['precision']:<10.4f} "
-            f"{r['recall']:<10.4f} "
-            f"{r['f1']:<10.4f}"
+            f"{acc:<10} {prec:<10} {rec:<10} {f1:<10}"
         )
 
     print("-" * 72 + "\n")
