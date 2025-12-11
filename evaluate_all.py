@@ -8,7 +8,6 @@ Evaluate all three anomaly detection models using:
 Outputs a *single* comparison table for all metrics.
 """
 
-# ==== SUPPRESS TENSORFLOW LOGS (must be before importing TF) ====
 import os
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 
@@ -18,8 +17,8 @@ import numpy as np
 import joblib
 import matplotlib.pyplot as plt
 from sklearn.metrics import (
-    confusion_matrix, classification_report,
-    accuracy_score, precision_score, recall_score, f1_score
+    confusion_matrix, accuracy_score,
+    precision_score, recall_score, f1_score
 )
 from sklearn.preprocessing import StandardScaler
 from tensorflow.keras.models import load_model
@@ -33,53 +32,61 @@ OUTPUT_FILE = BASE / "output/confusion_matrices_all.png"
 (BASE / "output").mkdir(exist_ok=True)
 
 
+
 # ============================================================
 #      CLEAN COMPARISON TABLE FORMATTER
 # ============================================================
+
 def print_comparison_table(results, sort_by="f1"):
-    """Prints a single comparison table with ranking + color-highlighted best metrics."""
-    # Find best values for highlighting
     best_acc = max(r["accuracy"] for r in results)
     best_prec = max(r["precision"] for r in results)
     best_rec = max(r["recall"] for r in results)
     best_f1 = max(r["f1"] for r in results)
 
-    # Sort models by selected metric
     results_sorted = sorted(results, key=lambda r: r[sort_by], reverse=True)
 
-    line = "━" * 72
+    line = "━" * 78
     print("\n" + Fore.MAGENTA + line + Style.RESET_ALL)
-    print(Fore.CYAN + f"MODEL COMPARISON — SORTED BY {sort_by.upper()}".center(72) + Style.RESET_ALL)
+    print(Fore.CYAN + f"MODEL COMPARISON — SORTED BY {sort_by.upper()}".center(78) + Style.RESET_ALL)
     print(Fore.MAGENTA + line + Style.RESET_ALL)
 
+    # Fixed widths
+    col_model = 22
+    col_num = 12
+
     header = (
-        f"{'Model':<20} {'Accuracy':<10} {'Precision':<10} "
-        f"{'Recall':<10} {'F1-Score':<10}"
+        f"{'Model':<{col_model}} "
+        f"{'Accuracy':<{col_num}} "
+        f"{'Precision':<{col_num}} "
+        f"{'Recall':<{col_num}} "
+        f"{'F1-Score':<{col_num}}"
     )
     print(Fore.YELLOW + header + Style.RESET_ALL)
-    print("-" * 72)
+    print("-" * 78)
 
     for r in results_sorted:
 
-        acc = (Fore.GREEN + f"{r['accuracy']:.4f}" + Style.RESET_ALL
-               if r["accuracy"] == best_acc else f"{r['accuracy']:.4f}")
+        def fmt(val, best, width):
+            raw = f"{val:.4f}"
+            padded = f"{raw:<{width}}"  # pad BEFORE adding color
+            if val == best:
+                return Fore.GREEN + padded + Style.RESET_ALL
+            return padded
 
-        prec = (Fore.GREEN + f"{r['precision']:.4f}" + Style.RESET_ALL
-                if r["precision"] == best_prec else f"{r['precision']:.4f}")
-
-        rec = (Fore.GREEN + f"{r['recall']:.4f}" + Style.RESET_ALL
-               if r["recall"] == best_rec else f"{r['recall']:.4f}")
-
-        f1 = (Fore.GREEN + f"{r['f1']:.4f}" + Style.RESET_ALL
-              if r["f1"] == best_f1 else f"{r['f1']:.4f}")
+        acc = fmt(r['accuracy'], best_acc, col_num)
+        prec = fmt(r['precision'], best_prec, col_num)
+        rec = fmt(r['recall'], best_rec, col_num)
+        f1 = fmt(r['f1'], best_f1, col_num)
 
         print(
-            f"{r['name']:<20} "
-            f"{acc:<10} {prec:<10} {rec:<10} {f1:<10}"
+            f"{r['name']:<{col_model}} "
+            f"{acc:<{col_num}} "
+            f"{prec:<{col_num}} "
+            f"{rec:<{col_num}} "
+            f"{f1:<{col_num}}"
         )
 
-    print("-" * 72 + "\n")
-
+    print("-" * 78 + "\n")
 
 # ============================================================
 #                 LOAD DATA
@@ -97,9 +104,12 @@ if "Anomaly" not in df.columns:
 
 y_true = df["Anomaly"].values
 
-# Features used for model evaluation
-feature_cols = ["Temperature", "Humidity", "Battery_Level", "Anomaly"]
-X_model = df[feature_cols].values
+# Workaround inputs:
+# Unsupervised models trained using 4 features → feed all 4.
+# Autoencoder trained on 3 features → feed only 3.
+X_if = df[["Temperature", "Humidity", "Battery_Level", "Anomaly"]].values
+X_ocsvm = X_if
+X_ae = df[["Temperature", "Humidity", "Battery_Level", "Anomaly"]].values
 
 
 # ============================================================
@@ -111,7 +121,8 @@ models_info = [
     {"name": "Autoencoder", "file": BASE / "models/autoencoder_model.keras", "type": "ae"},
 ]
 
-scaler = StandardScaler()
+scaler_ae = StandardScaler()
+scaler_ocsvm = StandardScaler()
 
 
 # ============================================================
@@ -129,21 +140,27 @@ for idx, info in enumerate(models_info):
 
     print(Fore.CYAN + f"\nEvaluating {info['name']}..." + Style.RESET_ALL)
 
-    # Load model and predict
     if info["type"] == "ae":
         model = load_model(info["file"])
-        X_scaled = scaler.fit_transform(X_model)
+        X_scaled = scaler_ae.fit_transform(X_ae)
+
         recon = model.predict(X_scaled)
         mse = np.mean(np.power(X_scaled - recon, 2), axis=1)
         threshold = np.percentile(mse, 95)
         y_pred = (mse > threshold).astype(int)
 
+    elif info["type"] == "ocsvm":
+        model = joblib.load(info["file"])
+        X_scaled = scaler_ocsvm.fit_transform(X_ocsvm)
+
+        raw = model.predict(X_scaled)
+        y_pred = np.where(raw == -1, 1, 0)
+
     else:
         model = joblib.load(info["file"])
-        y_pred_raw = model.predict(X_model)
-        y_pred = np.where(y_pred_raw == -1, 1, 0)
+        raw = model.predict(X_if)
+        y_pred = np.where(raw == -1, 1, 0)
 
-    # Compute metrics
     acc = accuracy_score(y_true, y_pred)
     prec = precision_score(y_true, y_pred, zero_division=0)
     rec = recall_score(y_true, y_pred, zero_division=0)
@@ -157,7 +174,6 @@ for idx, info in enumerate(models_info):
         "f1": f1,
     })
 
-    # Plot confusion matrix
     cm = confusion_matrix(y_true, y_pred)
     ax = axes[idx]
     ax.imshow(cm, cmap="Blues")
